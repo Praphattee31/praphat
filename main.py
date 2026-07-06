@@ -2,12 +2,12 @@ import os
 import threading
 import time
 import requests
+import json
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ดึงค่าจาก Environment Variables ใน Render
-# ให้ไปตั้งค่าใน Render > Environment > Add Environment Variable
+# ดึงค่าจาก Environment Variables ที่คุณตั้งไว้ใน Render
 APP_ID = os.environ.get("cli_aac1901298f89bef")
 APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
 
@@ -24,33 +24,38 @@ def get_headers(token: str, routename: str = "") -> dict:
     if routename: headers["Routename"] = routename
     return headers
 
-# ระบบ Keep-Alive เพื่อรักษา Token JMS
-def keep_alive_task():
-    while True:
-        try:
-            requests.get(f"{BASE_URL}/authn/checkToken", headers=get_headers(TOKEN), timeout=15)
-        except Exception as e:
-            print(f"Ping error: {e}")
-        time.sleep(900) # 15 นาที
+def send_feishu_message(open_id, text):
+    # 1. ดึง Access Token ของ Feishu เพื่อใช้เป็นบัตรผ่าน
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/app_access_token/"
+    resp = requests.post(url, json={"cli_aac1901298f89bef": APP_ID, "WwevlgARDeUkYogLsCpDCdTAmo3kSA2m": APP_SECRET})
+    access_token = resp.json().get("tenant_access_token")
+    
+    # 2. ส่งข้อความกลับไปยังผู้ใช้
+    msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    payload = {
+        "receive_id": open_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text})
+    }
+    requests.post(msg_url, headers=headers, json=payload)
 
-threading.Thread(target=keep_alive_task, daemon=True).start()
-
-# --- ระบบรับ Event จาก Feishu ---
+# ระบบรับ Event จาก Feishu
 @app.route("/", methods=["POST"])
 def feishu_webhook():
     data = request.json
     
-    # 1. การยืนยัน URL ครั้งแรก
+    # การยืนยัน URL ครั้งแรกจาก Feishu
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
     
-    # 2. รับข้อความจากแชท
+    # การรับข้อความจากแชท
     if "event" in data:
         event = data["event"]
         if event.get("type") == "im.message.receive_v1":
-            msg_content = event.get("message", {}).get("content")
-            print(f"ได้รับข้อความ: {msg_content}")
-            # ตรงนี้คุณสามารถเพิ่ม Logic การประมวลผลข้อความได้
+            sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
+            # สั่งให้บอทตอบกลับ
+            send_feishu_message(sender_id, "ได้รับข้อความแล้วครับ!")
             
     return jsonify({"message": "success"})
 
