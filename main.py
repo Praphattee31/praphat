@@ -7,8 +7,9 @@ import jms_api
 
 app = Flask(__name__)
 
-APP_ID = os.environ.get("cli_aac1901298f89bef")
-APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
+# ดึงค่าจาก Environment Variables ใน Render
+APP_ID = os.environ.get("APP_ID")
+APP_SECRET = os.environ.get("APP_SECRET")
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 user_sessions = {}
@@ -24,10 +25,12 @@ def event_handler():
         message = event.get("message", {})
         chat_id = message.get("chat_id")
         sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
+        
         content = json.loads(message.get("content", "{}"))
         text = content.get("text", "").strip()
         reply_text = ""
         
+        # --- Logic จัดการสถานะ ---
         if text.lower() == "exit":
             user_sessions.pop(sender_id, None)
             reply_text = "ยกเลิกรายการแล้ว"
@@ -54,7 +57,16 @@ def event_handler():
                     user_sessions.pop(sender_id, None)
                 else: reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
 
-        client.im.v1.message.create(im.CreateMessageRequest.builder().receive_id_type("chat_id").receive_id(chat_id).content(json.dumps({"text": reply_text})).msg_type("text").build())
+        # --- แก้ไขส่วนการส่งข้อความให้ถูกต้องตามโครงสร้าง Builder ---
+        req = im.CreateMessageRequest.builder() \
+            .receive_id_type("chat_id") \
+            .receive_id(chat_id) \
+            .content(json.dumps({"text": reply_text})) \
+            .msg_type("text") \
+            .build()
+        
+        client.im.v1.message.create(req)
+        
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
