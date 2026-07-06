@@ -115,9 +115,13 @@ def event_handler():
         if reply_text and chat_id:
             req = im.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
-                .receive_id(chat_id) \
-                .content(json.dumps({"text": reply_text})) \
-                .msg_type("text") \
+                .request_body(
+                    im.CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .msg_type("text")
+                    .content(json.dumps({"text": reply_text}))
+                    .build()
+                ) \
                 .build()
             resp = client.im.v1.message.create(req)
 
