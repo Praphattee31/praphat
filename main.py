@@ -19,21 +19,38 @@ client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 user_sessions = {}
 processed_events = set()
 
-# ... (ฟังก์ชัน AESCipher, decrypt_event เหมือนเดิม) ...
+# --- คืนค่าฟังก์ชันที่หายไป (ต้นเหตุของ Error) ---
+class AESCipher:
+    def __init__(self, key: str):
+        self.key = hashlib.sha256(key.encode("utf-8")).digest()
+    def decrypt(self, encrypt_data: str) -> dict:
+        raw = base64.b64decode(encrypt_data)
+        iv = raw[: AES.block_size]
+        cipher = AES.new(self.key, AES.MODE_CBC, iv)
+        decrypted = cipher.decrypt(raw[AES.block_size:])
+        pad_len = decrypted[-1]
+        decrypted = decrypted[:-pad_len]
+        return json.loads(decrypted.decode("utf-8"))
+
+def decrypt_event(data: dict) -> dict:
+    if "encrypt" in data:
+        if not ENCRYPT_KEY: return {}
+        cipher = AESCipher(ENCRYPT_KEY)
+        return cipher.decrypt(data["encrypt"])
+    return data
+# ---------------------------------------------
 
 @app.route("/", methods=["POST"])
 def event_handler():
     raw_data = request.json
-    data = decrypt_event(raw_data)
+    data = decrypt_event(raw_data) # เรียกใช้งานฟังก์ชันได้แล้ว
 
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
 
     event_id = data.get("header", {}).get("event_id")
-    if event_id in processed_events:
-        return jsonify({"status": "already_processed"})
-    if event_id:
-        processed_events.add(event_id)
+    if event_id in processed_events: return jsonify({"status": "already_processed"})
+    if event_id: processed_events.add(event_id)
 
     if data.get("header", {}).get("event_type") == "im.message.receive_v1":
         event = data.get("event", {})
@@ -42,16 +59,16 @@ def event_handler():
         sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
         content = json.loads(message.get("content", "{}"))
         text = content.get("text", "").strip()
+        
         reply_text = ""
-
-        # 1. จัดการกรณีผู้ใช้พิมพ์ข้อความเข้ามา (ไม่ว่าจะค้างสถานะไหน ถ้าพิมพ์ ID ใหม่มา ให้เริ่มเช็คทันที)
-        # ตรวจสอบก่อนว่าเป็น ID JMS หรือไม่ (สมมติว่าเป็น ID ถ้าไม่ใช่คำสั่งเมนู)
+        
+        # Logic: ถ้าพิมพ์ 'exit' ให้ล้าง Session
         if text.lower() == "exit":
             user_sessions.pop(sender_id, None)
             reply_text = "ยกเลิกรายการแล้ว"
         
+        # Logic: ถ้ามี Session และเลือกเมนู
         elif sender_id in user_sessions and text in ['1', '2', '3', '4', '5']:
-            # กรณีอยู่ในเมนูและเลือกเลข
             state_data = user_sessions[sender_id]
             if text == '5':
                 user_sessions.pop(sender_id, None)
@@ -64,32 +81,26 @@ def event_handler():
                     res = jms_api.reset_password_pda(user["id"])
                 else:
                     res = jms_api.reset_password_jms(user["id"])
-                
                 reply_text = f"✅ ดำเนินการสำเร็จ {'| รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
-                user_sessions.pop(sender_id, None) # ล้างทันทีหลังจบงาน
+                user_sessions.pop(sender_id, None) 
         
+        # Logic: ค้นหาผู้ใช้ (เริ่มรายการใหม่ หรือพิมพ์ ID ใหม่)
         else:
-            # กรณีพิมพ์อะไรมาก็ตามที่ไม่ใช่เลขเมนู ให้มองว่าเป็น ID JMS ใหม่เสมอ
             user = jms_api.search_user(text)
             if user and user.get("found"):
                 status = "เปิดใช้งานอยู่" if user.get("isEnable") == 1 else "ปิดใช้งานอยู่"
-                user_sessions[sender_id] = {"state": "waiting_choice", "user_data": user}
+                user_sessions[sender_id] = {"user_data": user}
                 reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS | 5.ออก"
             else:
-                # แก้ปัญหา: ไม่ต้องพิมพ์ exit แค่บอกว่าไม่มี
                 user_sessions.pop(sender_id, None)
-                reply_text = f"❌ ไม่พบข้อมูลสำหรับ: {text} \nกรุณากรอก ID JMS ใหม่ได้เลยครับ"
+                reply_text = f"❌ ไม่พบข้อมูล ID JMS: {text} \nกรุณากรอก ID ใหม่ หรือพิมพ์ 'exit' เพื่อจบการทำงาน"
 
         if reply_text and chat_id:
-            # ... (ส่วนการส่งข้อความเหมือนเดิม) ...
-            req = im.CreateMessageRequest.builder() \
-                .receive_id_type("chat_id") \
-                .request_body(im.CreateMessageRequestBody.builder()
-                    .receive_id(chat_id)
-                    .msg_type("text")
-                    .content(json.dumps({"text": reply_text}))
-                    .build()) \
-                .build()
+            req = im.CreateMessageRequest.builder().receive_id_type("chat_id").request_body(im.CreateMessageRequestBody.builder().receive_id(chat_id).msg_type("text").content(json.dumps({"text": reply_text})).build()).build()
             client.im.v1.message.create(req)
 
     return jsonify({"status": "success"})
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
