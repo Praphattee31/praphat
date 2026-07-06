@@ -7,13 +7,12 @@ import jms_api
 
 app = Flask(__name__)
 
-# ตั้งค่า App Credentials โดยดึงจากตัวแปร Environment
-# แนะนำ: ไปตั้งค่าใน Render Dashboard > Settings > Environment
-APP_ID = os.environ.get("cli_aac1901298f89bef")
-APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
+# ตั้งค่า App Credentials (ดึงจาก Environment Variables)
+APP_ID = os.environ.get("APP_ID")
+APP_SECRET = os.environ.get("APP_SECRET")
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
-# เก็บ Session ผู้ใช้ (ใช้ Dictionary เก็บสถานะ)
+# เก็บ Session ผู้ใช้
 user_sessions = {}
 
 @app.route("/", methods=["POST"])
@@ -29,7 +28,10 @@ def event_handler():
         event = data.get("event", {})
         message = event.get("message", {})
         chat_id = message.get("chat_id")
-        sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
+        
+        # ป้องกัน error กรณีไม่มี sender
+        sender = event.get("sender", {})
+        sender_id = sender.get("sender_id", {}).get("open_id")
         
         # ถอดรหัสข้อความ
         content = json.loads(message.get("content", "{}"))
@@ -37,10 +39,10 @@ def event_handler():
         
         reply_text = ""
         
-        # --- Logic การจัดการสถานะ ---
+        # Logic การทำงาน
         if text.lower() == "exit":
             user_sessions.pop(sender_id, None)
-            reply_text = "ยกเลิกการทำงานแล้ว"
+            reply_text = "ยกเลิกรายการแล้ว"
         
         elif sender_id not in user_sessions:
             user_sessions[sender_id] = {"state": "waiting_staff_no"}
@@ -50,7 +52,7 @@ def event_handler():
             state = user_sessions[sender_id]["state"]
             
             if state == "waiting_staff_no":
-                user = jms_api.search_user(text) 
+                user = jms_api.search_user(text)
                 if not user["found"]:
                     reply_text = f"❌ {user['message']} กรุณากรอกใหม่"
                 else:
@@ -60,21 +62,20 @@ def event_handler():
             
             elif state == "waiting_choice":
                 user = user_sessions[sender_id]["user_data"]
-                choice = text
-                if choice in ['1', '2', '3', '4']:
-                    if choice in ['1', '2']:
-                        res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (choice == '1'))
-                    elif choice == '3':
+                if text in ['1', '2', '3', '4']:
+                    if text in ['1', '2']:
+                        res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
+                    elif text == '3':
                         res = jms_api.reset_password_pda(user["id"])
                     else:
                         res = jms_api.reset_password_jms(user["id"])
                     
                     reply_text = f"ผลลัพธ์: {res.get('message', '')} {' รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
-                    user_sessions.pop(sender_id, None) 
+                    user_sessions.pop(sender_id, None)
                 else:
                     reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
 
-        # ส่งข้อความกลับไปที่ Feishu
+        # ส่งข้อความกลับ
         client.im.v1.message.create(
             im.CreateMessageRequest.builder()
             .receive_id_type("chat_id")
