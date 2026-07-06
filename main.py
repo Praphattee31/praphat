@@ -14,25 +14,29 @@ client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 user_sessions = {}
 
+
 @app.route("/", methods=["POST"])
 def event_handler():
     data = request.json
-    
+    print(f"📩 RAW EVENT: {json.dumps(data, ensure_ascii=False)}", flush=True)
+
     # 1. การตอบรับ URL Challenge
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
-    
+
     # 2. การจัดการ Events
     if data.get("header", {}).get("event_type") == "im.message.receive_v1":
         event = data.get("event", {})
         message = event.get("message", {})
         chat_id = message.get("chat_id")
         sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
-        
+
         content = json.loads(message.get("content", "{}"))
         text = content.get("text", "").strip()
         reply_text = ""
-        
+
+        print(f"👤 sender_id={sender_id}, chat_id={chat_id}, text='{text}'", flush=True)
+
         # --- Logic จัดการสถานะ ---
         if text.lower() == "exit":
             user_sessions.pop(sender_id, None)
@@ -53,19 +57,21 @@ def event_handler():
             elif state == "waiting_choice":
                 user = user_sessions[sender_id]["user_data"]
                 if text in ['1', '2', '3', '4']:
-                    if text in ['1', '2']: 
+                    if text in ['1', '2']:
                         res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
-                    elif text == '3': 
+                    elif text == '3':
                         res = jms_api.reset_password_pda(user["id"])
-                    else: 
+                    else:
                         res = jms_api.reset_password_jms(user["id"])
-                    
+
                     reply_text = f"ผลลัพธ์: {res.get('message', '')} {' รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
                     user_sessions.pop(sender_id, None)
-                else: 
+                else:
                     reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
 
-        # --- ส่วนการส่งข้อความ (แก้ไขจุด Error ของ Builder) ---
+        print(f"💬 reply_text='{reply_text}'", flush=True)
+
+        # --- ส่วนการส่งข้อความ (พร้อม logging ผลลัพธ์) ---
         if reply_text and chat_id:
             req = im.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
@@ -73,9 +79,20 @@ def event_handler():
                 .content(json.dumps({"text": reply_text})) \
                 .msg_type("text") \
                 .build()
-            client.im.v1.message.create(req)
-        
+            resp = client.im.v1.message.create(req)
+
+            if not resp.success():
+                print(
+                    f"❌ SEND FAILED: code={resp.code}, msg={resp.msg}, log_id={resp.get_log_id()}",
+                    flush=True,
+                )
+            else:
+                print("✅ SEND SUCCESS", flush=True)
+        else:
+            print(f"⚠️ ไม่ได้ส่งข้อความ: reply_text='{reply_text}', chat_id='{chat_id}'", flush=True)
+
     return jsonify({"status": "success"})
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
