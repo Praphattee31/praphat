@@ -19,7 +19,6 @@ client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 user_sessions = {}
 processed_events = set()
 
-# --- คืนค่าฟังก์ชันที่หายไป (ต้นเหตุของ Error) ---
 class AESCipher:
     def __init__(self, key: str):
         self.key = hashlib.sha256(key.encode("utf-8")).digest()
@@ -38,12 +37,11 @@ def decrypt_event(data: dict) -> dict:
         cipher = AESCipher(ENCRYPT_KEY)
         return cipher.decrypt(data["encrypt"])
     return data
-# ---------------------------------------------
 
 @app.route("/", methods=["POST"])
 def event_handler():
     raw_data = request.json
-    data = decrypt_event(raw_data) # เรียกใช้งานฟังก์ชันได้แล้ว
+    data = decrypt_event(raw_data)
 
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
@@ -62,29 +60,26 @@ def event_handler():
         
         reply_text = ""
         
-        # Logic: ถ้าพิมพ์ 'exit' ให้ล้าง Session
-        if text.lower() == "exit":
-            user_sessions.pop(sender_id, None)
-            reply_text = "ยกเลิกรายการแล้ว"
-        
-        # Logic: ถ้ามี Session และเลือกเมนู
-        elif sender_id in user_sessions and text in ['1', '2', '3', '4', '5']:
+        # 1. เช็คว่าอยู่ในสถานะเลือกเมนูหรือไม่ (เลือก 1-5)
+        if sender_id in user_sessions and text in ['1', '2', '3', '4', '5']:
             state_data = user_sessions[sender_id]
             if text == '5':
                 user_sessions.pop(sender_id, None)
                 reply_text = "ยกเลิกรายการแล้ว"
             else:
                 user = state_data["user_data"]
+                # ดำเนินการตามเมนู
                 if text in ['1', '2']:
                     res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
                 elif text == '3':
                     res = jms_api.reset_password_pda(user["id"])
                 else:
                     res = jms_api.reset_password_jms(user["id"])
+                
                 reply_text = f"✅ ดำเนินการสำเร็จ {'| รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
-                user_sessions.pop(sender_id, None) 
+                user_sessions.pop(sender_id, None) # เคลียร์ทันทีหลังจบงาน
         
-        # Logic: ค้นหาผู้ใช้ (เริ่มรายการใหม่ หรือพิมพ์ ID ใหม่)
+        # 2. ถ้าไม่ใช่เลขเมนู ให้มองว่าเป็น ID JMS เพื่อค้นหาใหม่เสมอ
         else:
             user = jms_api.search_user(text)
             if user and user.get("found"):
@@ -92,8 +87,8 @@ def event_handler():
                 user_sessions[sender_id] = {"user_data": user}
                 reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS | 5.ออก"
             else:
-                user_sessions.pop(sender_id, None)
-                reply_text = f"❌ ไม่พบข้อมูล ID JMS: {text} \nกรุณากรอก ID ใหม่ หรือพิมพ์ 'exit' เพื่อจบการทำงาน"
+                user_sessions.pop(sender_id, None) # เคลียร์ session ถ้าหาไม่เจอ
+                reply_text = f"❌ ไม่พบ ID: {text}\nกรุณากรอก ID JMS ใหม่ได้เลยครับ"
 
         if reply_text and chat_id:
             req = im.CreateMessageRequest.builder().receive_id_type("chat_id").request_body(im.CreateMessageRequestBody.builder().receive_id(chat_id).msg_type("text").content(json.dumps({"text": reply_text})).build()).build()
