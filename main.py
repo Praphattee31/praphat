@@ -7,7 +7,7 @@ import jms_api
 
 app = Flask(__name__)
 
-# ดึงค่าจาก Environment Variables ใน Render
+# ดึงค่าจาก Environment Variables
 APP_ID = os.environ.get("APP_ID")
 APP_SECRET = os.environ.get("APP_SECRET")
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
@@ -17,11 +17,12 @@ user_sessions = {}
 @app.route("/", methods=["POST"])
 def event_handler():
     data = request.json
-    # 1. ตอบรับ URL Challenge ของ Feishu
+    
+    # 1. การตอบรับ URL Challenge
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
     
-    # 2. จัดการข้อความ
+    # 2. การจัดการ Events
     if data.get("header", {}).get("event_type") == "im.message.receive_v1":
         event = data.get("event", {})
         message = event.get("message", {})
@@ -46,21 +47,26 @@ def event_handler():
                 if not user["found"]:
                     reply_text = f"❌ {user['message']}"
                 else:
-                    status = "เปิดใช้งานอยู่" if user["isEnable"] == 1 else "ปิดใช้งานอยู่"
+                    status = "เปิดใช้งานอยู่" if user.get("isEnable") == 1 else "ปิดใช้งานอยู่"
                     user_sessions[sender_id].update({"state": "waiting_choice", "user_data": user})
                     reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS"
             elif state == "waiting_choice":
                 user = user_sessions[sender_id]["user_data"]
                 if text in ['1', '2', '3', '4']:
-                    if text in ['1', '2']: res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
-                    elif text == '3': res = jms_api.reset_password_pda(user["id"])
-                    else: res = jms_api.reset_password_jms(user["id"])
+                    if text in ['1', '2']: 
+                        res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
+                    elif text == '3': 
+                        res = jms_api.reset_password_pda(user["id"])
+                    else: 
+                        res = jms_api.reset_password_jms(user["id"])
+                    
                     reply_text = f"ผลลัพธ์: {res.get('message', '')} {' รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
                     user_sessions.pop(sender_id, None)
-                else: reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
+                else: 
+                    reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
 
-        # --- ส่วนการส่งข้อความ ---
-        if reply_text:
+        # --- ส่วนการส่งข้อความ (แก้ไขจุด Error ของ Builder) ---
+        if reply_text and chat_id:
             req = im.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
                 .receive_id(chat_id) \
@@ -72,6 +78,5 @@ def event_handler():
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
-    # จุดที่แก้ไข: กำหนด host='0.0.0.0' และใช้ PORT จาก env
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
