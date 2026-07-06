@@ -7,8 +7,8 @@ import jms_api
 
 app = Flask(__name__)
 
-APP_ID = os.environ.get("APP_ID")
-APP_SECRET = os.environ.get("APP_SECRET")
+APP_ID = os.environ.get("cli_aac1901298f89bef")
+APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 user_sessions = {}
