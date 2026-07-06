@@ -1,8 +1,11 @@
 import os
 import json
+import base64
+import hashlib
 from flask import Flask, request, jsonify
 from lark_oapi import Client
 import lark_oapi.api.im.v1 as im
+from Crypto.Cipher import AES
 import jms_api
 
 app = Flask(__name__)
@@ -10,15 +13,52 @@ app = Flask(__name__)
 # ดึงค่าจาก Environment Variables
 APP_ID = os.environ.get("APP_ID")
 APP_SECRET = os.environ.get("APP_SECRET")
+ENCRYPT_KEY = os.environ.get("ENCRYPT_KEY")  # ต้องตั้งค่านี้ใน Render ให้ตรงกับหน้า Encryption Strategy
+
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 user_sessions = {}
 
 
+class AESCipher:
+    """ถอดรหัสข้อมูลที่ Feishu ส่งมาแบบ encrypt (AES-256-CBC)"""
+    def __init__(self, key: str):
+        self.key = hashlib.sha256(key.encode("utf-8")).digest()
+
+    def decrypt(self, encrypt_data: str) -> dict:
+        raw = base64.b64decode(encrypt_data)
+        iv = raw[: AES.block_size]
+        cipher = AES.new(self.key, AES.MODE_CBC, iv)
+        decrypted = cipher.decrypt(raw[AES.block_size:])
+        # ตัด PKCS7 padding ออก
+        pad_len = decrypted[-1]
+        decrypted = decrypted[:-pad_len]
+        return json.loads(decrypted.decode("utf-8"))
+
+
+def decrypt_event(data: dict) -> dict:
+    """ถ้ามี key 'encrypt' แปลว่าข้อมูลถูกเข้ารหัส ต้องถอดก่อนใช้งาน"""
+    if "encrypt" in data:
+        if not ENCRYPT_KEY:
+            print("⚠️ ได้รับ event แบบเข้ารหัส แต่ไม่มี ENCRYPT_KEY ใน Environment Variables!", flush=True)
+            return {}
+        cipher = AESCipher(ENCRYPT_KEY)
+        try:
+            decrypted = cipher.decrypt(data["encrypt"])
+            print(f"🔓 DECRYPTED EVENT: {json.dumps(decrypted, ensure_ascii=False)}", flush=True)
+            return decrypted
+        except Exception as e:
+            print(f"❌ ถอดรหัส event ไม่สำเร็จ: {e}", flush=True)
+            return {}
+    return data
+
+
 @app.route("/", methods=["POST"])
 def event_handler():
-    data = request.json
-    print(f"📩 RAW EVENT: {json.dumps(data, ensure_ascii=False)}", flush=True)
+    raw_data = request.json
+    print(f"📩 RAW EVENT: {json.dumps(raw_data, ensure_ascii=False)}", flush=True)
+
+    data = decrypt_event(raw_data)
 
     # 1. การตอบรับ URL Challenge
     if data.get("type") == "url_verification":
