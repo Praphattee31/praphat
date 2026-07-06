@@ -60,7 +60,7 @@ def event_handler():
         
         reply_text = ""
         
-        # 1. เช็คว่าอยู่ในสถานะเลือกเมนูหรือไม่ (เลือก 1-5)
+        # 1. กรณีอยู่ใน Session (เคยค้นหา ID ไปแล้วและกำลังเลือกเมนู)
         if sender_id in user_sessions and text in ['1', '2', '3', '4', '5']:
             state_data = user_sessions[sender_id]
             if text == '5':
@@ -71,15 +71,18 @@ def event_handler():
                 # ดำเนินการตามเมนู
                 if text in ['1', '2']:
                     res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
+                    user["isEnable"] = (1 if text == '1' else 0)
                 elif text == '3':
                     res = jms_api.reset_password_pda(user["id"])
                 else:
                     res = jms_api.reset_password_jms(user["id"])
                 
-                reply_text = f"✅ ดำเนินการสำเร็จ {'| รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
-                user_sessions.pop(sender_id, None) # เคลียร์ทันทีหลังจบงาน
+                # แสดงความสำเร็จและคงเมนูไว้ให้เลือกต่อ
+                status_text = "เปิดใช้งานอยู่" if user.get("isEnable") == 1 else "ปิดใช้งานอยู่"
+                reply_text = f"✅ ดำเนินการสำเร็จ {'| รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}\n\n" \
+                             f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status_text}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS | 5.ออก"
         
-        # 2. ถ้าไม่ใช่เลขเมนู ให้มองว่าเป็น ID JMS เพื่อค้นหาใหม่เสมอ
+        # 2. กรณีพิมพ์ ID ใหม่เข้ามา (หรือเริ่มรายการใหม่)
         else:
             user = jms_api.search_user(text)
             if user and user.get("found"):
@@ -87,8 +90,8 @@ def event_handler():
                 user_sessions[sender_id] = {"user_data": user}
                 reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS | 5.ออก"
             else:
-                user_sessions.pop(sender_id, None) # เคลียร์ session ถ้าหาไม่เจอ
-                reply_text = f"❌ ไม่พบ ID: {text}\nกรุณากรอก ID JMS ใหม่ได้เลยครับ"
+                user_sessions.pop(sender_id, None)
+                reply_text = f"❌ ไม่พบข้อมูล ID: {text}\nกรุณากรอก ID JMS ใหม่ได้เลยครับ"
 
         if reply_text and chat_id:
             req = im.CreateMessageRequest.builder().receive_id_type("chat_id").request_body(im.CreateMessageRequestBody.builder().receive_id(chat_id).msg_type("text").content(json.dumps({"text": reply_text})).build()).build()
