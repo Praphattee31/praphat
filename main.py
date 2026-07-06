@@ -8,8 +8,8 @@ app = Flask(__name__)
 
 # ดึงค่าจาก Environment Variables ใน Render
 # ให้ไปตั้งค่าใน Render > Environment > Add Environment Variable
-APP_ID = os.environ.get("FEISHU_APP_ID")
-APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
+APP_ID = os.environ.get("cli_aac1901298f89bef")
+APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
 
 # ตั้งค่า JMS
 BASE_URL = "https://jmsgw.jtexpress.co.th"
