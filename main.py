@@ -8,8 +8,8 @@ app = Flask(__name__)
 
 # ตั้งค่า App Credentials ของคุณ
 # นำค่ามาจากหน้า Developer Console > Credentials & Basic Info
-APP_ID = "YOUR_APP_ID"  # แก้ไขตรงนี้
-APP_SECRET = "YOUR_APP_SECRET"  # แก้ไขตรงนี้
+APP_ID = "cli_aac1901298f89bef"  # แก้ไขตรงนี้
+APP_SECRET = "WwevlgARDeUkYogLsCpDCdTAmo3kSA2m"  # แก้ไขตรงนี้
 
 # สร้าง Client
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
