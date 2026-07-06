@@ -7,9 +7,9 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ดึงค่าจาก Environment Variables ที่คุณตั้งไว้ใน Render
-APP_ID = os.environ.get("cli_aac1901298f89bef")
-APP_SECRET = os.environ.get("WwevlgARDeUkYogLsCpDCdTAmo3kSA2m")
+# ดึงค่าจาก Environment Variables ใน Render (ต้องตั้งค่าใน Dashboard ของ Render ให้ตรงกับชื่อ APP_ID และ APP_SECRET)
+APP_ID = os.environ.get("APP_ID")
+APP_SECRET = os.environ.get("APP_SECRET")
 
 # ตั้งค่า JMS
 BASE_URL = "https://jmsgw.jtexpress.co.th"
@@ -25,9 +25,9 @@ def get_headers(token: str, routename: str = "") -> dict:
     return headers
 
 def send_feishu_message(open_id, text):
-    # 1. ดึง Access Token ของ Feishu เพื่อใช้เป็นบัตรผ่าน
+    # 1. ดึง Access Token ของ Feishu
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/app_access_token/"
-    resp = requests.post(url, json={"cli_aac1901298f89bef": APP_ID, "WwevlgARDeUkYogLsCpDCdTAmo3kSA2m": APP_SECRET})
+    resp = requests.post(url, json={"app_id": APP_ID, "app_secret": APP_SECRET})
     access_token = resp.json().get("tenant_access_token")
     
     # 2. ส่งข้อความกลับไปยังผู้ใช้
