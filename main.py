@@ -1,52 +1,53 @@
+import os
 from flask import Flask, request, jsonify
-import requests
+from lark_oapi import Client
+import lark_oapi.api.im.v1 as im
+import json
 
 app = Flask(__name__)
 
-# เปลี่ยนค่าพวกนี้ให้ตรงกับของคุณ (หรือดึงจาก Environment Variables)
-APP_ID = "cli_aac1901298f89bef"
-APP_SECRET = "WwevlgARDeUkYogLsCpDCdTAmo3kSA2m"
+# ตั้งค่า App Credentials ของคุณ
+# นำค่ามาจากหน้า Developer Console > Credentials & Basic Info
+APP_ID = "YOUR_APP_ID"  # แก้ไขตรงนี้
+APP_SECRET = "YOUR_APP_SECRET"  # แก้ไขตรงนี้
 
-def get_tenant_access_token():
-    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    payload = {"app_id": APP_ID, "app_secret": APP_SECRET}
-    response = requests.post(url, json=payload)
-    return response.json().get("tenant_access_token")
-
-def send_feishu_message(target_id, content):
-    token = get_tenant_access_token()
-    url = "https://open.feishu.cn/open-apis/im/v1/messages"
-    params = {"receive_id_type": "open_id"} # หรือ chat_id ถ้าส่งเข้ากลุ่ม
-    
-    # หากต้องการส่งเข้ากลุ่ม ต้องปรับ receive_id_type เป็น "chat_id"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {
-        "receive_id": target_id,
-        "msg_type": "text",
-        "content": '{"text":"' + content + '"}'
-    }
-    requests.post(url, headers=headers, params=params, json=payload)
+# สร้าง Client
+client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 @app.route("/", methods=["POST"])
-def feishu_webhook():
+def event_handler():
     data = request.json
-    print(f"DEBUG: Received data: {data}") # ดูข้อมูลใน Logs ของ Render
-
-    # 1. การยืนยัน URL (จำเป็นต้องมี)
+    
+    # 1. การยืนยัน URL (URL Verification)
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
-
-    # 2. การรับข้อความจากแชท
-    if "event" in data:
-        event = data["event"]
-        if event.get("type") == "im.message.receive_v1":
-            # ดึงข้อมูลผู้ส่งและข้อมูลข้อความ
-            sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
-            
-            # บอทตอบกลับ
-            send_feishu_message(sender_id, "ได้รับข้อความแล้วครับ!")
-            
-    return jsonify({"message": "success"})
+    
+    # 2. การจัดการข้อความแชท (Message Received)
+    if data.get("header", {}).get("event_type") == "im.message.receive_v1":
+        event = data.get("event", {})
+        message = event.get("message", {})
+        chat_id = message.get("chat_id")
+        
+        # ถอดรหัสข้อความจาก JSON string
+        content = json.loads(message.get("content", "{}"))
+        text = content.get("text", "")
+        
+        # สร้างข้อความตอบกลับ
+        reply_text = f"บอทได้รับข้อความของคุณแล้ว: {text}"
+        
+        # ส่งข้อความกลับไปที่ห้องแชท
+        client.im.v1.message.create(
+            im.CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .body(im.CreateMessageRequestBody.builder()
+                  .receive_id(chat_id)
+                  .msg_type("text")
+                  .content(json.dumps({"text": reply_text}))
+                  .build())
+            .build()
+        )
+        
+    return jsonify({"status": "success"})
 
 if __name__ == "__main__":
     app.run(port=10000)
