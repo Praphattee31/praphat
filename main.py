@@ -19,7 +19,6 @@ client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
 # เก็บสถานะผู้ใช้งาน
 user_sessions = {}
-# เก็บ event_id ที่ประมวลผลไปแล้วเพื่อป้องกันการส่งซ้ำ
 processed_events = set()
 
 class AESCipher:
@@ -51,7 +50,6 @@ def event_handler():
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
 
-    # ป้องกันการประมวลผลซ้ำจาก Webhook
     event_id = data.get("header", {}).get("event_id")
     if event_id in processed_events:
         return jsonify({"status": "already_processed"})
@@ -67,7 +65,6 @@ def event_handler():
         text = content.get("text", "").strip()
         reply_text = ""
 
-        # --- Logic จัดการสถานะที่ปรับปรุงแล้ว ---
         if text.lower() == "exit":
             user_sessions.pop(sender_id, None)
             reply_text = "ยกเลิกรายการแล้ว"
@@ -82,28 +79,34 @@ def event_handler():
                 else:
                     status = "เปิดใช้งานอยู่" if user.get("isEnable") == 1 else "ปิดใช้งานอยู่"
                     user_sessions[sender_id].update({"state": "waiting_choice", "user_data": user})
-                    reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS"
+                    reply_text = f"✅ พบผู้ใช้: {user['name']} | สถานะ: {status}\nเลือก: 1.เปิด | 2.ปิด | 3.Reset PDA | 4.Reset JMS | 5.ออก"
             
             elif state == "waiting_choice":
                 user = user_sessions[sender_id]["user_data"]
-                if text in ['1', '2', '3', '4']:
-                    if text in ['1', '2']:
-                        res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
-                    elif text == '3':
-                        res = jms_api.reset_password_pda(user["id"])
+                if text in ['1', '2', '3', '4', '5']:
+                    if text == '5':
+                        user_sessions.pop(sender_id, None)
+                        reply_text = "ยกเลิกรายการแล้ว"
                     else:
-                        res = jms_api.reset_password_jms(user["id"])
-
-                    reply_text = f"ผลลัพธ์: {res.get('message', '')} {' รหัสใหม่: ' + res.get('new_password', '') if 'new_password' in res else ''}"
-                    user_sessions.pop(sender_id, None)
+                        # ทำการเรียก API และเปลี่ยนข้อความตอบกลับเป็นภาษาไทย
+                        if text in ['1', '2']:
+                            res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (text == '1'))
+                        elif text == '3':
+                            res = jms_api.reset_password_pda(user["id"])
+                        else:
+                            res = jms_api.reset_password_jms(user["id"])
+                        
+                        # สรุปผลลัพธ์เป็นภาษาไทย
+                        msg = "ดำเนินการสำเร็จ" 
+                        pwd = f" | รหัสใหม่: {res.get('new_password', '')}" if 'new_password' in res else ""
+                        reply_text = f"✅ {msg}{pwd}"
+                        user_sessions.pop(sender_id, None)
                 else:
-                    reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
+                    reply_text = "กรุณาเลือกหมายเลข 1-5 หรือพิมพ์ 'exit'"
         else:
-            # เริ่มต้น Session ใหม่
             user_sessions[sender_id] = {"state": "waiting_staff_no"}
-            reply_text = "กรุณากรอก Staff No (พิมพ์ 'exit' เพื่อออก):"
+            reply_text = "กรุณากรอก ID JMS (พิมพ์ 'exit' เพื่อออก):"
 
-        # ส่งข้อความกลับ
         if reply_text and chat_id:
             req = im.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
