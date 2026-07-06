@@ -17,9 +17,11 @@ user_sessions = {}
 @app.route("/", methods=["POST"])
 def event_handler():
     data = request.json
+    # 1. ตอบรับ URL Challenge ของ Feishu
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
     
+    # 2. จัดการข้อความ
     if data.get("header", {}).get("event_type") == "im.message.receive_v1":
         event = data.get("event", {})
         message = event.get("message", {})
@@ -57,17 +59,19 @@ def event_handler():
                     user_sessions.pop(sender_id, None)
                 else: reply_text = "กรุณาเลือกหมายเลข 1-4 หรือพิมพ์ 'exit'"
 
-        # --- แก้ไขส่วนการส่งข้อความให้ถูกต้องตามโครงสร้าง Builder ---
-        req = im.CreateMessageRequest.builder() \
-            .receive_id_type("chat_id") \
-            .receive_id(chat_id) \
-            .content(json.dumps({"text": reply_text})) \
-            .msg_type("text") \
-            .build()
-        
-        client.im.v1.message.create(req)
+        # --- ส่วนการส่งข้อความ ---
+        if reply_text:
+            req = im.CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .receive_id(chat_id) \
+                .content(json.dumps({"text": reply_text})) \
+                .msg_type("text") \
+                .build()
+            client.im.v1.message.create(req)
         
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
-    app.run(port=10000)
+    # จุดที่แก้ไข: กำหนด host='0.0.0.0' และใช้ PORT จาก env
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
