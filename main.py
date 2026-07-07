@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import hashlib
+import threading
 from flask import Flask, request, jsonify
 from lark_oapi import Client
 import lark_oapi.api.im.v1 as im
@@ -122,6 +123,11 @@ def send_card(chat_id: str, card: dict):
         print("✅ SEND SUCCESS", flush=True)
 
 
+def send_card_async(chat_id: str, card: dict):
+    """ส่งการ์ดแบบ Asynchronous เพื่อป้องกันปัญหา Timeout 3 วินาทีของ Lark"""
+    threading.Thread(target=send_card, args=(chat_id, card)).start()
+
+
 # ============================================================
 #  Card templates
 # ============================================================
@@ -156,7 +162,7 @@ def card_not_found(message: str):
     )
 
 
-def card_user_menu(user: dict, result_message: str = None, new_password: str = None):
+def card_user_menu(user: dict):
     is_enable = user.get("isEnable") == 1
     status_icon = "🟢" if is_enable else "🔴"
     status_text = "เปิดใช้งานอยู่" if is_enable else "ปิดใช้งานอยู่"
@@ -165,17 +171,9 @@ def card_user_menu(user: dict, result_message: str = None, new_password: str = N
         f"**ชื่อ:** {user['name']}",
         f"**Staff No:** {user['staffNo']}",
         f"**สถานะ:** {status_icon} {status_text}",
+        "",
+        "**เลือกดำเนินการ:**",
     ]
-    
-    if result_message:
-        lines.append("")
-        lines.append(f"🔔 **ผลลัพธ์ล่าสุด:** {result_message}")
-        
-    if new_password:
-        lines.append(f"🔑 **รหัสผ่านใหม่:** `{new_password}`")
-        
-    lines.append("")
-    lines.append("**เลือกดำเนินการ:**")
     
     return build_card(
         title="✅ พบผู้ใช้งาน",
@@ -189,6 +187,18 @@ def card_user_menu(user: dict, result_message: str = None, new_password: str = N
             {"text": "🚫 ยกเลิก", "value": {"choice": "cancel"}, "type": "default"},
         ],
         note="กดปุ่ม หรือพิมพ์ `ยกเลิก` เพื่อยกเลิก",
+    )
+
+
+def card_result(success: bool, message: str, new_password: str = None):
+    lines = [f"**ผลลัพธ์:** {message}"]
+    if new_password:
+        lines.append(f"**รหัสผ่านใหม่:** `{new_password}`")
+    return build_card(
+        title="✅ ดำเนินการสำเร็จ" if success else "❌ ดำเนินการไม่สำเร็จ",
+        template="green" if success else "red",
+        lines=lines,
+        note="พิมพ์ `ค้นหา ID` เพื่อเริ่มค้นหาผู้ใช้อื่น",
     )
 
 
@@ -261,18 +271,12 @@ def process_choice(user: dict, choice: str) -> dict:
 
     result_msg = translate_msg(res.get("message", ""))
     
-    if res.get("success"):
-        # รักษาสถานะการ์ดเมนูเดิมไว้โดยส่งข้อมูลอัปเดตไปแสดงผลบนหน้าจอเดิม
-        return card_user_menu(
-            user=user, 
-            result_message=result_msg, 
-            new_password=res.get("new_password")
-        )
-    else:
-        return card_user_menu(
-            user=user, 
-            result_message=f"❌ ดำเนินการไม่สำเร็จ ({result_msg})"
-        )
+    # คืนค่าการ์ดเขียว/แดง (card_result) เสมือนโค้ดเก่า
+    return card_result(
+        success=bool(res.get("success")),
+        message=result_msg,
+        new_password=res.get("new_password")
+    )
 
 
 # ============================================================
@@ -308,21 +312,19 @@ def event_handler():
         print(f"🖱️ CARD ACTION: operator_id={operator_id}, chat_id={chat_id}, value={value}", flush=True)
 
         # A. การกดปุ่มเมนู "ค้นหา ID" หรือ "เพิ่ม Token"
-        # ให้รันพฤติกรรมดั้งเดิม คือการ "ส่งข้อความใหม่" เพื่อให้ได้ลักษณะตามรูปที่ 2 (ไม่ทับการ์ดต้อนรับใบเดิม)
+        # ส่งการ์ดใบใหม่ด้วย thread แยกต่างหาก เพื่อป้องกันไม่ให้เกิด Timeout
         if "menu" in value:
             menu = value["menu"]
             if menu == "search":
                 user_sessions[operator_id] = {"state": "waiting_staff_no"}
-                send_card(chat_id, card_ask_staff_no())
+                send_card_async(chat_id, card_ask_staff_no())
             elif menu == "token":
                 user_sessions[operator_id] = {"state": "waiting_token"}
-                send_card(chat_id, card_ask_token())
+                send_card_async(chat_id, card_ask_token())
             
-            # ตอบกลับ Lark เพื่อยอมรับ callback สำเร็จ
             return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
                 
         # B. การกดเลือกการทำรายการ (1-4) หรือกดยกเลิก
-        # ให้ใช้พฤติกรรมแบบใหม่ คือการอัปเดตการ์ดเมนูใบเดิมแบบ In-place เพื่อไม่ให้ส่งข้อความใหม่พร่ำเพรื่อ
         elif "choice" in value:
             choice = value["choice"]
             if choice == "cancel":
@@ -334,15 +336,18 @@ def event_handler():
                 })
             elif operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
                 user = user_sessions[operator_id]["user_data"]
-                # ประมวลผลและส่งการ์ดเมนูที่อัปเดตผลลัพธ์แล้วกลับไปทับใบเดิม
+                
+                # ประมวลผลและส่งการ์ดผลลัพธ์ (เขียว/แดง)
                 card = process_choice(user, choice)
+                
+                # ส่งเป็นข้อความใหม่เข้าห้องแชท (เหมือนพฤติกรรมโค้ดเก่าของคุณ)
+                send_card_async(chat_id, card)
+                
+                # สำคัญมาก: ไม่ pop session ออกจาก waiting_choice เพื่อรักษาสถานะปุ่มบนเมนูเดิมให้กดต่อได้!
                 if card.get("header", {}).get("template") == "orange":  # token invalid
                     user_sessions.pop(operator_id, None)
                 
-                return jsonify({
-                    "toast": {"text": "ดำเนินการเรียบร้อย"},
-                    "card": card
-                })
+                return jsonify({"toast": {"text": "ดำเนินการเรียบร้อย"}})
             else:
                 expired_card = build_card(
                     title="⚠️ รายการหมดอายุ",
@@ -421,6 +426,8 @@ def event_handler():
             if text in ["1", "2", "3", "4"]:
                 user = user_sessions[sender_id]["user_data"]
                 card = process_choice(user, text)
+                # ส่งเป็นข้อความผลลัพธ์ใบใหม่เหมือนโค้ดเก่า
+                send_card_async(chat_id, card)
             else:
                 # แก้ปัญหา: พิมพ์อย่างอื่นที่ไม่ใช่ 1-4 ให้เงียบไว้ ไม่ส่งการ์ดแจ้งเตือน "กรุณาเลือกใหม่"
                 pass
