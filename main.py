@@ -358,7 +358,7 @@ def event_handler():
                 expired_card = build_card(
                     title="⚠️ รายการหมดอายุ",
                     template="orange",
-                    lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณากดปุ่ม 🔍 ค้นหา ID เพื่อค้นหาใหม่"],
+                    lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณกดปุ่ม 🔍 ค้นหา ID เพื่อค้นหาใหม่"],
                 )
                 return jsonify({
                     "card": expired_card
