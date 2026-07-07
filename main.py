@@ -125,6 +125,19 @@ def send_card(chat_id: str, card: dict):
 # ============================================================
 #  Card templates
 # ============================================================
+def card_welcome():
+    return build_card(
+        title="👋 สวัสดีครับ",
+        template="blue",
+        lines=["กรุณาเลือกสิ่งที่ต้องการทำ:"],
+        actions=[
+            {"text": "🔍 ค้นหา ID", "value": {"menu": "search"}, "type": "primary"},
+            {"text": "🔑 เพิ่ม Token", "value": {"menu": "token"}, "type": "default"},
+        ],
+        note="หรือพิมพ์ `ค้นหา ID` / `เพิ่ม Token` ก็ได้เช่นกัน",
+    )
+
+
 def card_ask_staff_no():
     return build_card(
         title="🔎 ค้นหาผู้ใช้งาน",
@@ -296,21 +309,33 @@ def event_handler():
         event = data.get("event", {})
         operator_id = event.get("operator", {}).get("open_id")
         chat_id = event.get("context", {}).get("open_chat_id")
-        choice = event.get("action", {}).get("value", {}).get("choice")
+        value = event.get("action", {}).get("value", {})
 
-        print(f"🖱️ CARD ACTION: operator_id={operator_id}, chat_id={chat_id}, choice={choice}", flush=True)
+        print(f"🖱️ CARD ACTION: operator_id={operator_id}, chat_id={chat_id}, value={value}", flush=True)
 
         card = None
-        if operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
-            user = user_sessions[operator_id]["user_data"]
-            card = process_choice(user, choice)
-            user_sessions.pop(operator_id, None)
-        else:
-            card = build_card(
-                title="⚠️ รายการหมดอายุ",
-                template="orange",
-                lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณาพิมพ์ `ค้นหา ID` เพื่อค้นหาใหม่"],
-            )
+
+        if "menu" in value:
+            # กดปุ่มจากการ์ดต้อนรับ (ค้นหา ID / เพิ่ม Token)
+            menu = value["menu"]
+            if menu == "search":
+                user_sessions[operator_id] = {"state": "waiting_staff_no"}
+                card = card_ask_staff_no()
+            elif menu == "token":
+                user_sessions[operator_id] = {"state": "waiting_token"}
+                card = card_ask_token()
+        elif "choice" in value:
+            choice = value["choice"]
+            if operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
+                user = user_sessions[operator_id]["user_data"]
+                card = process_choice(user, choice)
+                user_sessions.pop(operator_id, None)
+            else:
+                card = build_card(
+                    title="⚠️ รายการหมดอายุ",
+                    template="orange",
+                    lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณากดปุ่ม 🔍 ค้นหา ID เพื่อค้นหาใหม่"],
+                )
 
         if card and chat_id:
             send_card(chat_id, card)
@@ -377,18 +402,20 @@ def event_handler():
             else:
                 card = card_invalid_choice()
 
-        # --- ค่าเริ่มต้น: ไม่ว่าจะยังไม่มี session หรืออยู่ใน state waiting_staff_no
-        #     ก็ถือว่าข้อความนี้คือ Staff No แล้วค้นหาทันที (แก้บั๊กต้องพิมพ์ 2 รอบ) ---
-        else:
+        # --- สถานะ 'กำลังรอ Staff No' (มาจากการกดปุ่ม/พิมพ์คำสั่งค้นหาอย่างชัดเจนแล้ว) ---
+        elif current_state == "waiting_staff_no":
             user = jms_api.search_user(text)
             if user.get("token_invalid"):
                 card = card_token_invalid()
             elif not user["found"]:
                 card = card_not_found(user["message"])
-                user_sessions[sender_id] = {"state": "waiting_staff_no"}
             else:
                 user_sessions[sender_id] = {"state": "waiting_choice", "user_data": user}
                 card = card_user_menu(user)
+
+        # --- ไม่มี session ใดๆ เลย (เช่น ทักทาย/ข้อความทั่วไป) โชว์การ์ดต้อนรับพร้อมปุ่มกด ---
+        else:
+            card = card_welcome()
 
         print(f"💬 card='{json.dumps(card, ensure_ascii=False) if card else None}'", flush=True)
 
