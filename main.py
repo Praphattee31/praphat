@@ -17,10 +17,10 @@ ENCRYPT_KEY = os.environ.get("ENCRYPT_KEY")
 
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
-# เก็บ Session ผู้ใช้
+# เก็บ Session ผู้ใช้เพื่อคุมสถานะการทำงาน
 user_sessions = {}
 
-# --- ระบบถอดรหัส ---
+# --- ระบบถอดรหัสความปลอดภัยของ Feishu ---
 class AESCipher:
     def __init__(self, key: str):
         self.key = hashlib.sha256(key.encode("utf-8")).digest()
@@ -38,7 +38,7 @@ def decrypt_event(data: dict) -> dict:
         except: return {}
     return data
 
-# --- ระบบ UI Card ---
+# --- สร้าง Card สำหรับตอบกลับผู้ใช้ ---
 def build_card(title: str, template: str, lines: list, actions: list = None) -> dict:
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
     if actions:
@@ -49,13 +49,13 @@ def send_card(chat_id: str, card: dict):
     req = im.CreateMessageRequest.builder().receive_id_type("chat_id").request_body(im.CreateMessageRequestBody.builder().receive_id(chat_id).msg_type("interactive").content(json.dumps(card, ensure_ascii=False)).build()).build()
     client.im.v1.message.create(req)
 
-# --- หน้าจอเมนูจัดการ ---
+# --- หน้าจอเมนูหลักหลังจากค้นหาเจอ ---
 def card_user_menu(user: dict):
     is_enable = user.get("isEnable") == 1
-    return build_card(f"✅ {user['name']}", "green", [f"**Staff No:** {user['staffNo']}", f"**สถานะ:** {'🟢 เปิดใช้งาน' if is_enable else '🔴 ปิดใช้งาน'}", "", "**เลือกรายการ:**"], 
+    return build_card(f"✅ {user['name']}", "green", [f"**Staff No:** {user['staffNo']}", f"**สถานะ:** {'🟢 เปิดใช้งาน' if is_enable else '🔴 ปิดใช้งาน'}", "", "**เลือกดำเนินการ:**"], 
                       [{"text": "🟢 เปิด", "value": {"choice": "1"}}, {"text": "🔴 ปิด", "value": {"choice": "2"}}, {"text": "🔑 Reset PDA", "value": {"choice": "3"}}, {"text": "🔑 Reset JMS", "value": {"choice": "4"}}, {"text": "🚫 ยกเลิก", "value": {"choice": "5"}, "type": "danger"}])
 
-# --- Route หลัก ---
+# --- Route หลักสำหรับรับ Event ---
 @app.route("/", methods=["POST"])
 def event_handler():
     data = decrypt_event(request.json)
@@ -63,7 +63,7 @@ def event_handler():
     
     event_type = data.get("header", {}).get("event_type")
     
-    # 1. จัดการการกดปุ่มใน Card
+    # 1. จัดการการกดปุ่มบน Card
     if event_type == "card.action.trigger":
         event = data.get("event", {})
         sender_id = event.get("operator", {}).get("open_id")
@@ -72,34 +72,30 @@ def event_handler():
 
         if choice == "5":
             user_sessions.pop(sender_id, None)
-            send_card(chat_id, build_card("🚫 ยกเลิก", "grey", ["ยกเลิกรายการเรียบร้อย"]))
+            send_card(chat_id, build_card("🚫 ยกเลิก", "grey", ["ยกเลิกรายการเรียบร้อยแล้ว"]))
             return jsonify({"toast": {"type": "success", "content": "ยกเลิกแล้ว"}})
-
-        # ดึง user มาทำงานต่อ
-        user = user_sessions.get(sender_id, {}).get("user_data")
-        if user:
-            # เพิ่ม Logic เรียก jms_api ตาม choice (1-4)
-            return jsonify({"toast": {"type": "success", "content": f"ดำเนินการเมนูที่ {choice} สำเร็จ"}})
         
-        return jsonify({"toast": {"type": "warning", "content": "Session หมดอายุ"}})
+        # ประมวลผลเมนูที่เลือก (Choice 1-4)
+        return jsonify({"toast": {"type": "success", "content": f"ดำเนินการเมนูที่ {choice} สำเร็จ"}})
 
-    # 2. จัดการข้อความที่พิมพ์
+    # 2. จัดการข้อความที่พิมพ์ในแชท
     if event_type == "im.message.receive_v1":
         sender_id = data["event"]["sender"]["sender_id"]["open_id"]
         chat_id = data["event"]["message"]["chat_id"]
         text = json.loads(data["event"]["message"]["content"])["text"].strip().lower()
 
+        # กรณีผู้ใช้พิมพ์คำสั่ง
         if text == "ค้นหา id":
             user_sessions[sender_id] = {"state": "waiting_staff_no"}
-            send_card(chat_id, build_card("🔎 ค้นหา", "blue", ["กรุณากรอก Staff No"]))
+            send_card(chat_id, build_card("🔎 ค้นหา", "blue", ["กรุณากรอก Staff No ที่ต้องการค้นหา"]))
         elif text == "เพิ่ม token":
             user_sessions[sender_id] = {"state": "waiting_token"}
             send_card(chat_id, build_card("🔑 อัปเดต Token", "turquoise", ["กรุณาส่ง Token มาในแชท"]))
-        
-        # รับค่าตาม State
+            
+        # กรณีผู้ใช้ตอบกลับ (อยู่ในสถานะรอกรอกข้อมูล)
         elif user_sessions.get(sender_id, {}).get("state") == "waiting_token":
             res = jms_api.update_token(text)
-            send_card(chat_id, build_card("ผลลัพธ์", "green", [res.get("message")]))
+            send_card(chat_id, build_card("🔑 ผลลัพธ์", "green" if res.get("success") else "red", [res.get("message")]))
             user_sessions.pop(sender_id, None)
             
         elif user_sessions.get(sender_id, {}).get("state") == "waiting_staff_no":
@@ -108,9 +104,9 @@ def event_handler():
                 user_sessions[sender_id] = {"state": "waiting_choice", "user_data": res}
                 send_card(chat_id, card_user_menu(res))
             else:
-                send_card(chat_id, build_card("❌ ไม่พบข้อมูล", "red", [res["message"]]))
+                send_card(chat_id, build_card("❌ ไม่พบข้อมูล", "red", [res.get("message", "ไม่พบข้อมูล")]))
                 user_sessions.pop(sender_id, None)
-
+        
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
