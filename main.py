@@ -193,7 +193,10 @@ def card_user_menu(user: dict):
 def card_result(success: bool, message: str, new_password: str = None):
     lines = [f"**ผลลัพธ์:** {message}"]
     if new_password:
-        lines.append(f"**รหัสผ่านใหม่:** `{new_password}`")
+        lines.append("")
+        lines.append("**🔑 รหัสผ่านใหม่ (แตะที่แถบสีเทาด้านล่างเพื่อคัดลอก):**")
+        # ใช้ triple backticks เพื่อสร้างกล่อง Code Block ใน Lark ซึ่งระบบจะมีปุ่ม Copy และแตะคัดลอกได้ง่าย
+        lines.append(f"```\n{new_password}\n```")
     return build_card(
         title="✅ ดำเนินการสำเร็จ" if success else "❌ ดำเนินการไม่สำเร็จ",
         template="green" if success else "red",
@@ -328,8 +331,7 @@ def event_handler():
         elif "choice" in value:
             choice = value["choice"]
             if choice == "cancel":
-                # แก้ไขปัญหาที่ 1: กดยกเลิกแล้วทำงานไม่ผ่าน
-                # ปรับระบบให้ส่ง Welcome Card ใบใหม่ (แบบส่งข้อความใหม่เสมือนการพิมพ์ยกเลิก) และลบ Session
+                # แก้ไขปัญหาที่ 1: ปรับระบบให้ส่ง Welcome Card ใบใหม่ และลบ Session (เหมือนการพิมพ์ยกเลิกเป๊ะๆ)
                 user_sessions.pop(operator_id, None)
                 send_card_async(chat_id, card_welcome())
                 return jsonify({"toast": {"text": "ยกเลิกรายการเรียบร้อยแล้ว"}})
@@ -344,13 +346,11 @@ def event_handler():
                 send_card_async(chat_id, card)
                 
                 # แก้ไขปัญหาที่ 2: ให้มันอยู่ในหน้าพบผู้ใช้งานเหมือนเดิมจนกว่าจะกดยกเลิก
-                # โดยเราจะไม่ pop session เพื่อให้กดปุ่มอื่นต่อได้ และทำการ Update การ์ดผู้ใช้งานเดิมแบบ In-place 
-                # เพื่ออัปเดตข้อมูลสถานะพนักงาน (เช่น จาก 🔴 เปลี่ยนเป็น 🟢) ให้ถูกต้องตามล่าสุดบนหน้าจอเดิม!
+                # ทำการ Update การ์ดผู้ใช้งานเดิมแบบ In-place เพื่อแสดงสถานะพนักงานล่าสุด
                 if card.get("header", {}).get("template") == "orange":  # token invalid
                     user_sessions.pop(operator_id, None)
                     return jsonify({"toast": {"text": "Token หมดอายุ"}})
                 
-                # อัปเดตข้อมูลการ์ดเดิม (In-place) เพื่อให้สถานะล่าสุดแสดงตรงกัน
                 updated_menu = card_user_menu(user)
                 return jsonify({
                     "toast": {"text": "ดำเนินการเรียบร้อย"},
