@@ -3,18 +3,35 @@ import os
 
 BASE_URL = "https://jmsgw.jtexpress.co.th"
 
+# ไฟล์สำหรับบันทึก token สำรองข้าม process เพื่อรองรับ multi-worker บน Render
+TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".jms_token")
+
 # เก็บ token ปัจจุบันไว้ใน memory เริ่มต้นจาก Environment Variable
-# แก้ไขได้ระหว่างรันด้วยฟังก์ชัน set_token() (เรียกจากคำสั่ง 'settoken' ในแชท Feishu)
 _current_token = os.environ.get("JMS_AUTH_TOKEN")
 
 
 def set_token(new_token: str):
-    """อัปเดต token ใหม่แบบ runtime ไม่ต้องแก้ Environment Variable หรือ restart service"""
+    """อัปเดต token ใหม่แบบ runtime และบันทึกลงไฟล์เพื่อรองรับ multi-worker"""
     global _current_token
     _current_token = new_token.strip()
+    try:
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+            f.write(_current_token)
+    except Exception as e:
+        print(f"⚠️ ไม่สามารถบันทึก Token ลงไฟล์ได้: {e}", flush=True)
 
 
 def get_current_token() -> str:
+    global _current_token
+    # ถ้าใน memory ไม่มี ลองอ่านจากไฟล์
+    if not _current_token:
+        if os.path.exists(TOKEN_FILE):
+            try:
+                with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+                    _current_token = f.read().strip()
+            except Exception as e:
+                print(f"⚠️ ไม่สามารถอ่าน Token จากไฟล์ได้: {e}", flush=True)
+    
     if not _current_token:
         raise ValueError("ไม่พบ Token กรุณาตั้งค่าด้วยคำสั่ง settoken ในแชท")
     return _current_token
@@ -65,7 +82,12 @@ def search_user(staff_no: str) -> dict:
         resp = requests.post(url, json=payload, headers=get_headers(token, "userList|permissionIndex"), timeout=15)
         if _is_token_invalid(resp):
             return {"found": False, "token_invalid": True, "message": "Token หมดอายุหรือไม่ถูกต้อง"}
-        records = resp.json().get("data", {}).get("records", [])
+        
+        # ป้องกัน AttributeError ในกรณีที่ data คืนค่า null หรือโครงสร้างไม่สมบูรณ์
+        resp_json = resp.json()
+        data = resp_json.get("data") or {}
+        records = data.get("records", []) if isinstance(data, dict) else []
+        
         if not records:
             return {"found": False, "message": "ไม่พบ user ที่มี staffNo นี้"}
         u = records[0]
@@ -82,9 +104,13 @@ def enable_user(user_id: int, name: str, staff_no: str, current_is_enable: int, 
 
     action_path = "enable" if enable else "disable"
     url = f"{BASE_URL}/oauth/sysUser/{action_path}"
+    
+    # กำหนดสถานะใหม่ (1 = เปิดใช้งาน, 0 = ปิดใช้งาน)
+    new_is_enable = 1 if enable else 0
+    
     payload = [
         {
-            "newData": {"id": user_id, "name": name, "staffNo": staff_no, "isEnable": current_is_enable},
+            "newData": {"id": user_id, "name": name, "staffNo": staff_no, "isEnable": new_is_enable},
             "oldData": {"id": user_id, "name": name, "staffNo": staff_no, "isEnable": current_is_enable},
         }
     ]
