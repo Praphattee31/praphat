@@ -338,7 +338,12 @@ def event_handler():
                 })
 
             elif operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
+                # ดึงข้อมูลพนักงานออกมาก่อน
                 user = user_sessions[operator_id]["user_data"]
+                
+                # ดำเนินการลบ Session ทันที ก่อนเริ่มยิง API ไปยังระบบ J&T เพื่อป้องกัน Double Click 
+                # (หากมีการกดซ้ำเข้ามาอีกรอบ จะเข้าเงื่อนไข else ด้านล่าง และจะรีเฟรชการ์ดเป็นหน้าแรกทันทีโดยไม่ประมวลผลซ้ำ)
+                user_sessions.pop(operator_id, None)
                 
                 # ประมวลผลและได้การ์ดเขียว/แดง (ผลลัพธ์)
                 card = process_choice(user, choice)
@@ -346,22 +351,17 @@ def event_handler():
                 # ส่งการ์ดผลลัพธ์เป็นข้อความใหม่เข้าห้องแชท
                 send_card_async(chat_id, card)
                 
-                # ลบ Session เสมอหลังทำรายการสำเร็จ เพื่อป้องกันการสับสน บั๊ก หรือการกดปุ่มซ้ำซ้อนในกลุ่มแชท
-                user_sessions.pop(operator_id, None)
-                
-                # และทำการเปลี่ยนหน้าจอการ์ดเมนูเดิมที่พึ่งกดทำรายการไป (In-place) ให้กลับเป็นหน้าต้อนรับ สวัสดีครับ ทันที
+                # พลิกการ์ดเดิม (In-place) ให้กลับเป็นหน้าต้อนรับสีฟ้าทันที ไม่ค้างปุ่มไว้
                 return jsonify({
                     "toast": {"text": "ดำเนินการเรียบร้อย"},
                     "card": card_welcome()
                 })
             else:
-                expired_card = build_card(
-                    title="⚠️ รายการหมดอายุ",
-                    template="orange",
-                    lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณกดปุ่ม 🔍 ค้นหา ID เพื่อค้นหาใหม่"],
-                )
+                # ป้องกันเออเรอร์และการทำซ้ำ: หาก Session ไม่มีแล้ว (เช่น ถูกเคลียร์จากการคลิกครั้งแรกแล้ว หรือหมดอายุ) 
+                # ให้ปรับการ์ดเดิมนี้เป็นหน้าเริ่มต้น Welcome (สวัสดีครับ) ทันที
                 return jsonify({
-                    "card": expired_card
+                    "toast": {"text": "รายการสำเร็จหรือหมดอายุแล้ว"},
+                    "card": card_welcome()
                 })
 
         return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
@@ -431,13 +431,16 @@ def event_handler():
         elif current_state == "waiting_choice":
             if text in ["1", "2", "3", "4"]:
                 user = user_sessions[sender_id]["user_data"]
+                
+                # ล้าง Session ทันทีก่อนประมวลผล เพื่อป้องกันข้อความเบิ้ล/ซ้ำซ้อน
+                user_sessions.pop(sender_id, None)
+                
                 card = process_choice(user, text)
                 
                 # ส่งเป็นข้อความผลลัพธ์ใบใหม่เหมือนโค้ดเก่า
                 send_card_async(chat_id, card)
                 
-                # ล้าง Session และส่ง Welcome Card ใบใหม่แจ้งเตือนต่อท้าย
-                user_sessions.pop(sender_id, None)
+                # ส่ง Welcome Card ใบใหม่แจ้งเตือนต่อท้าย
                 send_card_async(chat_id, card_welcome())
             else:
                 # แก้ปัญหา: พิมพ์อย่างอื่นที่ไม่ใช่ 1-4 ให้เงียบไว้ ไม่ส่งการ์ดแจ้งเตือน "กรุณาเลือกใหม่"
