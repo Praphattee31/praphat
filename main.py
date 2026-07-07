@@ -16,8 +16,6 @@ APP_SECRET = os.environ.get("APP_SECRET")
 ENCRYPT_KEY = os.environ.get("ENCRYPT_KEY")
 
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
-
-# เก็บ Session ผู้ใช้
 user_sessions = {}
 
 # --- ระบบถอดรหัส ---
@@ -63,7 +61,7 @@ def event_handler():
     
     event_type = data.get("header", {}).get("event_type")
     
-    # จัดการกดปุ่ม (Card Action)
+    # 1. จัดการกดปุ่มบนการ์ด
     if event_type == "card.action.trigger":
         event = data.get("event", {})
         sender_id = event.get("operator", {}).get("open_id")
@@ -75,11 +73,11 @@ def event_handler():
             send_card(chat_id, build_card("🚫 ยกเลิก", "grey", ["ยกเลิกรายการเรียบร้อยแล้ว"]))
             return jsonify({"toast": {"type": "success", "content": "ยกเลิกแล้ว"}})
         
-        # เพิ่ม Logic การทำงาน (1-4) ที่นี่...
-        # หลังทำงานเสร็จ ให้ส่ง card_user_menu กลับไปเพื่อให้เมนูค้างอยู่
+        # เพิ่ม Logic การทำงาน (1-4) เรียก jms_api ของคุณที่นี่
+        # หลังจากทำงานเสร็จให้ใช้ send_card(chat_id, card_user_menu(user)) อีกครั้งเพื่อค้างหน้าจอ
         return jsonify({"toast": {"type": "success", "content": "ดำเนินการสำเร็จ"}})
 
-    # จัดการข้อความ (Message)
+    # 2. จัดการข้อความที่พิมพ์
     if event_type == "im.message.receive_v1":
         sender_id = data["event"]["sender"]["sender_id"]["open_id"]
         chat_id = data["event"]["message"]["chat_id"]
@@ -91,6 +89,11 @@ def event_handler():
         elif text == "เพิ่ม token":
             user_sessions[sender_id] = {"state": "waiting_token"}
             send_card(chat_id, build_card("🔑 เพิ่ม Token", "turquoise", ["กรุณาส่ง Token มาในแชท"]))
+        elif user_sessions.get(sender_id, {}).get("state") == "waiting_token":
+            # นำ Token ไปบันทึกที่นี่
+            res = jms_api.save_token(text)
+            send_card(chat_id, build_card("ผลลัพธ์", "green", [res.get("message", "บันทึก Token สำเร็จ")]))
+            user_sessions.pop(sender_id, None)
         
     return jsonify({"status": "success"})
 
