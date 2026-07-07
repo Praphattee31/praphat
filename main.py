@@ -262,7 +262,6 @@ def process_choice(user: dict, choice: str) -> dict:
     if choice in ["1", "2"]:
         res = jms_api.enable_user(user["id"], user["name"], user["staffNo"], user["isEnable"], (choice == "1"))
         if res.get("success"):
-            # อัปเดตข้อมูลสถานะใน Memory เพื่อนำไปสร้างการ์ดใหม่ให้ถูกต้อง
             user["isEnable"] = 1 if choice == "1" else 0
     elif choice == "3":
         res = jms_api.reset_password_pda(user["id"])
@@ -274,7 +273,7 @@ def process_choice(user: dict, choice: str) -> dict:
 
     result_msg = translate_msg(res.get("message", ""))
     
-    # คืนค่าการ์ดเขียว/แดง (card_result) เสมือนโค้ดเก่า
+    # คืนค่าการ์ดเขียว/แดง (card_result)
     return card_result(
         success=bool(res.get("success")),
         message=result_msg,
@@ -331,10 +330,12 @@ def event_handler():
         elif "choice" in value:
             choice = value["choice"]
             if choice == "cancel":
-                # แก้ไขปัญหาที่ 1: ปรับระบบให้ส่ง Welcome Card ใบใหม่ และลบ Session (เหมือนการพิมพ์ยกเลิกเป๊ะๆ)
+                # กดยกเลิก -> ลบ Session และเปลี่ยนหน้าจอการ์ดเดิม (In-place) ให้เป็นหน้า Welcome (สวัสดีครับ) ทันที
                 user_sessions.pop(operator_id, None)
-                send_card_async(chat_id, card_welcome())
-                return jsonify({"toast": {"text": "ยกเลิกรายการเรียบร้อยแล้ว"}})
+                return jsonify({
+                    "toast": {"text": "ยกเลิกรายการแล้ว"},
+                    "card": card_welcome()
+                })
 
             elif operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
                 user = user_sessions[operator_id]["user_data"]
@@ -345,16 +346,13 @@ def event_handler():
                 # ส่งการ์ดผลลัพธ์เป็นข้อความใหม่เข้าห้องแชท
                 send_card_async(chat_id, card)
                 
-                # แก้ไขปัญหาที่ 2: ให้มันอยู่ในหน้าพบผู้ใช้งานเหมือนเดิมจนกว่าจะกดยกเลิก
-                # ทำการ Update การ์ดผู้ใช้งานเดิมแบบ In-place เพื่อแสดงสถานะพนักงานล่าสุด
-                if card.get("header", {}).get("template") == "orange":  # token invalid
-                    user_sessions.pop(operator_id, None)
-                    return jsonify({"toast": {"text": "Token หมดอายุ"}})
+                # ลบ Session เสมอหลังทำรายการสำเร็จ เพื่อป้องกันการสับสน บั๊ก หรือการกดปุ่มซ้ำซ้อนในกลุ่มแชท
+                user_sessions.pop(operator_id, None)
                 
-                updated_menu = card_user_menu(user)
+                # และทำการเปลี่ยนหน้าจอการ์ดเมนูเดิมที่พึ่งกดทำรายการไป (In-place) ให้กลับเป็นหน้าต้อนรับ สวัสดีครับ ทันที
                 return jsonify({
                     "toast": {"text": "ดำเนินการเรียบร้อย"},
-                    "card": updated_menu
+                    "card": card_welcome()
                 })
             else:
                 expired_card = build_card(
@@ -438,8 +436,9 @@ def event_handler():
                 # ส่งเป็นข้อความผลลัพธ์ใบใหม่เหมือนโค้ดเก่า
                 send_card_async(chat_id, card)
                 
-                # ส่งอัปเดตการ์ดเมนูเดิมในแชทให้เป็นสถานะล่าสุดด้วย (ป้องกันสถานะไม่ตรงหลังพิมพ์เลข)
-                updated_menu = card_user_menu(user)
+                # ล้าง Session และส่ง Welcome Card ใบใหม่แจ้งเตือนต่อท้าย
+                user_sessions.pop(sender_id, None)
+                send_card_async(chat_id, card_welcome())
             else:
                 # แก้ปัญหา: พิมพ์อย่างอื่นที่ไม่ใช่ 1-4 ให้เงียบไว้ ไม่ส่งการ์ดแจ้งเตือน "กรุณาเลือกใหม่"
                 pass
