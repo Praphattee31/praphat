@@ -21,7 +21,7 @@ client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 # เก็บ session ของแต่ละคนไว้ใน memory: { open_id: {"state": ..., "user_data": {...}} }
 user_sessions = {}
 
-# แปลข้อความภาษาจีนที่ระบบ JMS มักส่งกลับมา ให้เป็นภาษาไทยที่อ่านง่ายขึ้น
+# แปลข้อความภาษาจีนจากระบบ JMS ให้เป็นภาษาไทย
 MSG_TRANSLATE = {
     "请求成功": "คำขอสำเร็จ",
     "操作成功": "ดำเนินการสำเร็จ",
@@ -73,7 +73,7 @@ def decrypt_event(data: dict) -> dict:
 
 
 # ============================================================
-#  Card Builder
+#  Card Builder & Sender
 # ============================================================
 def build_card(title: str, template: str, lines: list, note: str = None, actions: list = None) -> dict:
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
@@ -124,12 +124,28 @@ def send_card(chat_id: str, card: dict):
 
 
 def send_card_async(chat_id: str, card: dict):
-    """ส่งการ์ดแบบ Asynchronous เพื่อป้องกันปัญหา Timeout 3 วินาทีของ Lark"""
+    """ส่งการ์ดแบบเบื้องหลัง เพื่อแก้ปัญหา Timeout 3 วินาทีของ Lark"""
     threading.Thread(target=send_card, args=(chat_id, card)).start()
 
 
 # ============================================================
-#  Card templates
+#  Callback Response Builder (สำหรับ Lark Card Schema 1.0)
+#  ป้องกัน Error 200672 จากการส่งฟอร์แมตผิดรุ่น
+# ============================================================
+def callback_response(content: str, card: dict = None) -> dict:
+    resp = {
+        "toast": {
+            "type": "info",
+            "content": content
+        }
+    }
+    if card:
+        resp["card"] = card
+    return resp
+
+
+# ============================================================
+#  Card Templates
 # ============================================================
 def card_welcome():
     return build_card(
@@ -195,7 +211,6 @@ def card_result(success: bool, message: str, new_password: str = None):
     if new_password:
         lines.append("")
         lines.append("**🔑 รหัสผ่านใหม่ (แตะที่แถบสีเทาด้านล่างเพื่อคัดลอก):**")
-        # ใช้ triple backticks เพื่อสร้างกล่อง Code Block ใน Lark ซึ่งระบบจะมีปุ่ม Copy และแตะคัดลอกได้ง่าย
         lines.append(f"```\n{new_password}\n```")
     return build_card(
         title="✅ ดำเนินการสำเร็จ" if success else "❌ ดำเนินการไม่สำเร็จ",
@@ -256,7 +271,7 @@ def card_token_format_error():
 
 
 # ============================================================
-#  Logic กลาง: ประมวลผลตัวเลือก 1-4 (ใช้ร่วมกันทั้งพิมพ์เลขและกดปุ่ม)
+#  Logic กลาง: ประมวลผลตัวเลือก 1-4 
 # ============================================================
 def process_choice(user: dict, choice: str) -> dict:
     if choice in ["1", "2"]:
@@ -273,7 +288,6 @@ def process_choice(user: dict, choice: str) -> dict:
 
     result_msg = translate_msg(res.get("message", ""))
     
-    # คืนค่าการ์ดเขียว/แดง (card_result)
     return card_result(
         success=bool(res.get("success")),
         message=result_msg,
@@ -289,7 +303,6 @@ def event_handler():
     if request.method in ["GET", "HEAD"]:
         return jsonify({"status": "ok"}), 200
 
-    # ใช้ get_json(silent=True) เพื่อป้องกัน crash ในกรณีที่ data ไม่เป็น JSON
     raw_data = request.get_json(silent=True) or {}
     print(f"📩 RAW EVENT: {json.dumps(raw_data, ensure_ascii=False)}", flush=True)
 
@@ -314,7 +327,6 @@ def event_handler():
         print(f"🖱️ CARD ACTION: operator_id={operator_id}, chat_id={chat_id}, value={value}", flush=True)
 
         # A. การกดปุ่มเมนู "ค้นหา ID" หรือ "เพิ่ม Token"
-        # ส่งการ์ดใบใหม่ด้วย thread แยกต่างหาก เพื่อป้องกันไม่ให้เกิด Timeout
         if "menu" in value:
             menu = value["menu"]
             if menu == "search":
@@ -324,47 +336,38 @@ def event_handler():
                 user_sessions[operator_id] = {"state": "waiting_token"}
                 send_card_async(chat_id, card_ask_token())
             
-            return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
+            return jsonify(callback_response("กำลังดำเนินการ..."))
                 
         # B. การกดเลือกการทำรายการ (1-4) หรือกดยกเลิก
         elif "choice" in value:
             choice = value["choice"]
             if choice == "cancel":
-                # กดยกเลิก -> ลบ Session และเปลี่ยนหน้าจอการ์ดเดิม (In-place) ให้เป็นหน้า Welcome (สวัสดีครับ) ทันที
+                # กดยกเลิก -> ลบ Session และเปลี่ยนหน้าจอการ์ดเดิม (In-place) ให้เป็นหน้า Welcome ทันที
                 user_sessions.pop(operator_id, None)
-                return jsonify({
-                    "toast": {"text": "ยกเลิกรายการแล้ว"},
-                    "card": card_welcome()
-                })
+                return jsonify(callback_response("ยกเลิกรายการแล้ว", card_welcome()))
 
             elif operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
-                # ดึงข้อมูลพนักงานออกมาก่อน
                 user = user_sessions[operator_id]["user_data"]
                 
-                # ดำเนินการลบ Session ทันที ก่อนเริ่มยิง API ไปยังระบบ J&T เพื่อป้องกัน Double Click 
-                # (หากมีการกดซ้ำเข้ามาอีกรอบ จะเข้าเงื่อนไข else ด้านล่าง และจะรีเฟรชการ์ดเป็นหน้าแรกทันทีโดยไม่ประมวลผลซ้ำ)
+                # ดำเนินการลบ Session ทันที ก่อนเริ่มทำรายการเพื่อป้องกันการ Double Click
                 user_sessions.pop(operator_id, None)
                 
-                # ประมวลผลและได้การ์ดเขียว/แดง (ผลลัพธ์)
+                # ประมวลผลและได้การ์ดผลลัพธ์ (เขียว/แดง)
                 card = process_choice(user, choice)
+                
+                if card.get("header", {}).get("template") == "orange":  # token invalid
+                    return jsonify(callback_response("Token หมดอายุ", card))
                 
                 # ส่งการ์ดผลลัพธ์เป็นข้อความใหม่เข้าห้องแชท
                 send_card_async(chat_id, card)
                 
-                # พลิกการ์ดเดิม (In-place) ให้กลับเป็นหน้าต้อนรับสีฟ้าทันที ไม่ค้างปุ่มไว้
-                return jsonify({
-                    "toast": {"text": "ดำเนินการเรียบร้อย"},
-                    "card": card_welcome()
-                })
+                # พลิกการ์ดเดิม (In-place) ให้กลับเป็นหน้าต้อนรับสีฟ้าทันที
+                return jsonify(callback_response("ดำเนินการเรียบร้อย", card_welcome()))
             else:
-                # ป้องกันเออเรอร์และการทำซ้ำ: หาก Session ไม่มีแล้ว (เช่น ถูกเคลียร์จากการคลิกครั้งแรกแล้ว หรือหมดอายุ) 
-                # ให้ปรับการ์ดเดิมนี้เป็นหน้าเริ่มต้น Welcome (สวัสดีครับ) ทันที
-                return jsonify({
-                    "toast": {"text": "รายการสำเร็จหรือหมดอายุแล้ว"},
-                    "card": card_welcome()
-                })
+                # ป้องกันเออเรอร์และการทำซ้ำ: รีเฟรชกลับหน้าต้อนรับเริ่มต้นทันที
+                return jsonify(callback_response("รายการสำเร็จหรือหมดอายุแล้ว", card_welcome()))
 
-        return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
+        return jsonify(callback_response("กำลังดำเนินการ..."))
 
     # ---------------------------------------------------
     # 2. ข้อความปกติ
@@ -373,13 +376,13 @@ def event_handler():
         event = data.get("event", {})
         message = event.get("message", {})
         chat_id = message.get("chat_id")
-        chat_type = message.get("chat_type")  # "p2p" หรือ "group"
+        chat_type = message.get("chat_type")
         sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id")
 
         content = json.loads(message.get("content", "{}"))
         text = content.get("text", "").strip()
 
-        # ลบ tag mention ออกจากข้อความ (กรณีเรียกบอทในกลุ่ม เช่น @BotName ค้นหา ID)
+        # ลบ tag mention ออกจากข้อความ
         mentions = message.get("mentions", [])
         for m in mentions:
             key = m.get("key")
@@ -399,7 +402,7 @@ def event_handler():
 
         current_state = user_sessions.get(sender_id, {}).get("state")
 
-        # --- คำสั่ง settoken <token> (พิมพ์รวมบรรทัดเดียว สำหรับผู้ใช้ที่คุ้นเคย) ---
+        # --- คำสั่ง settoken <token> (พิมพ์รวมบรรทัดเดียว) ---
         if text_lower.startswith("settoken"):
             parts = text.split(None, 1)
             if len(parts) == 2 and parts[1].strip():
@@ -411,9 +414,9 @@ def event_handler():
 
         elif text_lower in EXIT_WORDS:
             user_sessions.pop(sender_id, None)
-            card = card_welcome()  # เมื่อกดยกเลิก/พิมพ์ยกเลิก ให้กลับไปหน้าแรกต้อนรับ
+            card = card_welcome()
 
-        # --- กำลังรอรับ Token ที่วางมาเป็นข้อความถัดไป (จากปุ่ม 'เพิ่ม Token') ---
+        # --- กำลังรอรับ Token ที่วางมาเป็นข้อความถัดไป ---
         elif current_state == "waiting_token":
             jms_api.set_token(text.strip())
             user_sessions.pop(sender_id, None)
@@ -431,20 +434,11 @@ def event_handler():
         elif current_state == "waiting_choice":
             if text in ["1", "2", "3", "4"]:
                 user = user_sessions[sender_id]["user_data"]
-                
-                # ล้าง Session ทันทีก่อนประมวลผล เพื่อป้องกันข้อความเบิ้ล/ซ้ำซ้อน
                 user_sessions.pop(sender_id, None)
                 
                 card = process_choice(user, text)
-                
-                # ส่งเป็นข้อความผลลัพธ์ใบใหม่เหมือนโค้ดเก่า
                 send_card_async(chat_id, card)
-                
-                # ส่ง Welcome Card ใบใหม่แจ้งเตือนต่อท้าย
                 send_card_async(chat_id, card_welcome())
-            else:
-                # แก้ปัญหา: พิมพ์อย่างอื่นที่ไม่ใช่ 1-4 ให้เงียบไว้ ไม่ส่งการ์ดแจ้งเตือน "กรุณาเลือกใหม่"
-                pass
 
         # --- สถานะ 'กำลังรอ Staff No' ---
         elif current_state == "waiting_staff_no":
@@ -457,9 +451,8 @@ def event_handler():
                 user_sessions[sender_id] = {"state": "waiting_choice", "user_data": user}
                 card = card_user_menu(user)
 
-        # --- ไม่มี session ใดๆ เลย (เช่น ทักทาย/ข้อความทั่วไป) ---
+        # --- ไม่มี session ใดๆ เลย ---
         else:
-            # รายการคำสั่งทักทายภาษาไทยและอังกฤษ
             greetings = {
                 "สวัสดี", "หวัดดี", "สวัสดีครับ", "สวัสดีค่ะ", "สวัสดีจ้า", 
                 "เริ่ม", "hello", "hi", "เมนู", "menu", "ช่วยหน่อย", "help"
@@ -468,8 +461,7 @@ def event_handler():
             if text_lower in greetings:
                 card = card_welcome()
             else:
-                # หากไม่มี session ค้างอยู่ และพิมพ์ข้อความที่มีความยาว >= 5 และมีตัวเลขอยู่ด้วย (บ่งบอกว่าเป็น Staff ID)
-                # จะทำการค้นหาให้โดยอัตโนมัติ เพื่ออำนวยความสะดวกให้ผู้ใช้ไม่ต้องพิมพ์ "ค้นหา ID" ก่อน
+                # สแกน Staff ID อัตโนมัติ (ความยาว >= 5 และมีตัวเลขปนอยู่)
                 if len(text) >= 5 and any(char.isdigit() for char in text):
                     user = jms_api.search_user(text)
                     if user.get("token_invalid"):
@@ -480,12 +472,8 @@ def event_handler():
                     else:
                         card = card_not_found(user["message"])
                 else:
-                    # หากเป็นแชทส่วนตัว (p2p) และพิมพ์อย่างอื่นที่ไม่ใช่ Staff ID ให้แสดงการ์ดต้อนรับ
                     if chat_type == "p2p":
                         card = card_welcome()
-                    else:
-                        # หากเป็นแชทกลุ่ม และพิมพ์คำอื่น ๆ ที่ไม่ใช่คำทักทายและไม่ใช่ Staff ID ให้เงียบไว้เพื่อไม่ให้รบกวนกลุ่ม
-                        pass
 
         print(f"💬 card='{json.dumps(card, ensure_ascii=False) if card else None}'", flush=True)
 
