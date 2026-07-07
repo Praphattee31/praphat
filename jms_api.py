@@ -3,15 +3,12 @@ import os
 
 BASE_URL = "https://jmsgw.jtexpress.co.th"
 
-# ไฟล์สำหรับบันทึก token สำรองข้าม process เพื่อรองรับ multi-worker บน Render
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".jms_token")
 
-# เก็บ token ปัจจุบันไว้ใน memory เริ่มต้นจาก Environment Variable
 _current_token = os.environ.get("JMS_AUTH_TOKEN")
 
 
 def set_token(new_token: str):
-    """อัปเดต token ใหม่แบบ runtime และบันทึกลงไฟล์เพื่อรองรับ multi-worker"""
     global _current_token
     _current_token = new_token.strip()
     try:
@@ -23,7 +20,6 @@ def set_token(new_token: str):
 
 def get_current_token() -> str:
     global _current_token
-    # ถ้าใน memory ไม่มี ลองอ่านจากไฟล์
     if not _current_token:
         if os.path.exists(TOKEN_FILE):
             try:
@@ -31,7 +27,6 @@ def get_current_token() -> str:
                     _current_token = f.read().strip()
             except Exception as e:
                 print(f"⚠️ ไม่สามารถอ่าน Token จากไฟล์ได้: {e}", flush=True)
-    
     if not _current_token:
         raise ValueError("ไม่พบ Token กรุณาตั้งค่าด้วยคำสั่ง settoken ในแชท")
     return _current_token
@@ -51,17 +46,14 @@ def get_headers(token: str, routename: str = "") -> dict:
 
 
 def _is_token_invalid(resp) -> bool:
-    """เช็คว่า response บ่งบอกว่า token หมดอายุ/ไม่ถูกต้องหรือไม่"""
     if resp.status_code in (401, 403):
         return True
     try:
         body = resp.json()
     except Exception:
         return False
-
     msg = f"{body.get('msg', '')} {body.get('message', '')}".lower()
     code = body.get("code")
-
     keywords = ["token", "登录", "过期", "unauthorized", "登陆", "expired", "auth"]
     if any(k.lower() in msg for k in keywords):
         return True
@@ -75,19 +67,15 @@ def search_user(staff_no: str) -> dict:
         token = get_current_token()
     except ValueError as e:
         return {"found": False, "token_invalid": True, "message": str(e)}
-
     url = f"{BASE_URL}/oauth/sysUser/staffNosPage"
     payload = {"current": 1, "size": 20, "staffNo": staff_no, "countryId": "1"}
     try:
         resp = requests.post(url, json=payload, headers=get_headers(token, "userList|permissionIndex"), timeout=15)
         if _is_token_invalid(resp):
             return {"found": False, "token_invalid": True, "message": "Token หมดอายุหรือไม่ถูกต้อง"}
-        
-        # ป้องกัน AttributeError ในกรณีที่ data คืนค่า null หรือโครงสร้างไม่สมบูรณ์
         resp_json = resp.json()
         data = resp_json.get("data") or {}
         records = data.get("records", []) if isinstance(data, dict) else []
-        
         if not records:
             return {"found": False, "message": "ไม่พบ user ที่มี staffNo นี้"}
         u = records[0]
@@ -101,13 +89,9 @@ def enable_user(user_id: int, name: str, staff_no: str, current_is_enable: int, 
         token = get_current_token()
     except ValueError as e:
         return {"success": False, "token_invalid": True, "message": str(e)}
-
     action_path = "enable" if enable else "disable"
     url = f"{BASE_URL}/oauth/sysUser/{action_path}"
-    
-    # กำหนดสถานะใหม่ (1 = เปิดใช้งาน, 0 = ปิดใช้งาน)
     new_is_enable = 1 if enable else 0
-    
     payload = [
         {
             "newData": {"id": user_id, "name": name, "staffNo": staff_no, "isEnable": new_is_enable},
@@ -129,7 +113,6 @@ def reset_password_pda(user_id: int) -> dict:
         token = get_current_token()
     except ValueError as e:
         return {"success": False, "token_invalid": True, "message": str(e)}
-
     url = f"{BASE_URL}/oauth/sysUser/resetPasswordByApp"
     try:
         resp = requests.post(url, params={"id": user_id}, headers=get_headers(token), timeout=15)
@@ -146,7 +129,6 @@ def reset_password_jms(user_id: int) -> dict:
         token = get_current_token()
     except ValueError as e:
         return {"success": False, "token_invalid": True, "message": str(e)}
-
     url = f"{BASE_URL}/oauth/sysUser/resetPasswordByJms"
     try:
         resp = requests.post(url, params={"id": user_id}, json={"countryId": "1"}, headers=get_headers(token), timeout=15)
