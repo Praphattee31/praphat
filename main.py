@@ -10,14 +10,12 @@ import jms_api
 
 app = Flask(__name__)
 
-# ดึงค่าจาก Environment Variables
+# ดึงค่า Environment Variables
 APP_ID = os.environ.get("APP_ID")
 APP_SECRET = os.environ.get("APP_SECRET")
 ENCRYPT_KEY = os.environ.get("ENCRYPT_KEY")
 
 client = Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
-
-# เก็บ Session ผู้ใช้เพื่อคุมสถานะการทำงาน
 user_sessions = {}
 
 # --- ระบบถอดรหัสความปลอดภัยของ Feishu ---
@@ -38,7 +36,7 @@ def decrypt_event(data: dict) -> dict:
         except: return {}
     return data
 
-# --- สร้าง Card สำหรับตอบกลับผู้ใช้ ---
+# --- ฟังก์ชันสร้างการ์ด ---
 def build_card(title: str, template: str, lines: list, actions: list = None) -> dict:
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
     if actions:
@@ -49,21 +47,31 @@ def send_card(chat_id: str, card: dict):
     req = im.CreateMessageRequest.builder().receive_id_type("chat_id").request_body(im.CreateMessageRequestBody.builder().receive_id(chat_id).msg_type("interactive").content(json.dumps(card, ensure_ascii=False)).build()).build()
     client.im.v1.message.create(req)
 
-# --- หน้าจอเมนูหลักหลังจากค้นหาเจอ ---
+# --- หน้าจอเมนูหลัก ---
 def card_user_menu(user: dict):
     is_enable = user.get("isEnable") == 1
-    return build_card(f"✅ {user['name']}", "green", [f"**Staff No:** {user['staffNo']}", f"**สถานะ:** {'🟢 เปิดใช้งาน' if is_enable else '🔴 ปิดใช้งาน'}", "", "**เลือกดำเนินการ:**"], 
-                      [{"text": "🟢 เปิด", "value": {"choice": "1"}}, {"text": "🔴 ปิด", "value": {"choice": "2"}}, {"text": "🔑 Reset PDA", "value": {"choice": "3"}}, {"text": "🔑 Reset JMS", "value": {"choice": "4"}}, {"text": "🚫 ยกเลิก", "value": {"choice": "5"}, "type": "danger"}])
+    return build_card(f"✅ {user['name']}", "green", 
+                      [f"**Staff No:** {user['staffNo']}", 
+                       f"**สถานะ:** {'🟢 เปิดใช้งาน' if is_enable else '🔴 ปิดใช้งาน'}", 
+                       "", "**เลือกดำเนินการ:**"], 
+                      [
+                          {"text": "🟢 เปิด", "value": {"choice": "1"}}, 
+                          {"text": "🔴 ปิด", "value": {"choice": "2"}}, 
+                          {"text": "🔑 Reset PDA", "value": {"choice": "3"}}, 
+                          {"text": "🔑 Reset JMS", "value": {"choice": "4"}}, 
+                          {"text": "🚫 ยกเลิก", "value": {"choice": "5"}, "type": "danger"}
+                      ])
 
-# --- Route หลักสำหรับรับ Event ---
+# --- Route หลัก ---
 @app.route("/", methods=["POST"])
 def event_handler():
+    if not request.json: return jsonify({"status": "error"}), 400
     data = decrypt_event(request.json)
     if data.get("type") == "url_verification": return jsonify({"challenge": data.get("challenge")})
     
     event_type = data.get("header", {}).get("event_type")
     
-    # 1. จัดการการกดปุ่มบน Card
+    # 1. จัดการการกดปุ่ม (Card Action)
     if event_type == "card.action.trigger":
         event = data.get("event", {})
         sender_id = event.get("operator", {}).get("open_id")
@@ -75,28 +83,32 @@ def event_handler():
             send_card(chat_id, build_card("🚫 ยกเลิก", "grey", ["ยกเลิกรายการเรียบร้อยแล้ว"]))
             return jsonify({"toast": {"type": "success", "content": "ยกเลิกแล้ว"}})
         
-        # ประมวลผลเมนูที่เลือก (Choice 1-4)
+        # เพิ่ม Logic การทำงานเมนู 1-4 ตาม choice
         return jsonify({"toast": {"type": "success", "content": f"ดำเนินการเมนูที่ {choice} สำเร็จ"}})
 
-    # 2. จัดการข้อความที่พิมพ์ในแชท
+    # 2. จัดการข้อความที่ส่งเข้ามา
     if event_type == "im.message.receive_v1":
         sender_id = data["event"]["sender"]["sender_id"]["open_id"]
         chat_id = data["event"]["message"]["chat_id"]
-        text = json.loads(data["event"]["message"]["content"])["text"].strip().lower()
+        try:
+            text = json.loads(data["event"]["message"]["content"])["text"].strip().lower()
+        except: text = ""
 
-        # กรณีผู้ใช้พิมพ์คำสั่ง
         if text == "ค้นหา id":
             user_sessions[sender_id] = {"state": "waiting_staff_no"}
             send_card(chat_id, build_card("🔎 ค้นหา", "blue", ["กรุณากรอก Staff No ที่ต้องการค้นหา"]))
+            return jsonify({"status": "success"})
+        
         elif text == "เพิ่ม token":
             user_sessions[sender_id] = {"state": "waiting_token"}
-            send_card(chat_id, build_card("🔑 อัปเดต Token", "turquoise", ["กรุณาส่ง Token มาในแชท"]))
+            send_card(chat_id, build_card("🔑 อัปเดต Token", "turquoise", ["กรุณาส่ง Token ใหม่มาในแชท"]))
+            return jsonify({"status": "success"})
             
-        # กรณีผู้ใช้ตอบกลับ (อยู่ในสถานะรอกรอกข้อมูล)
         elif user_sessions.get(sender_id, {}).get("state") == "waiting_token":
             res = jms_api.update_token(text)
-            send_card(chat_id, build_card("🔑 ผลลัพธ์", "green" if res.get("success") else "red", [res.get("message")]))
+            send_card(chat_id, build_card("🔑 ผลลัพธ์", "green" if res["success"] else "red", [res["message"]]))
             user_sessions.pop(sender_id, None)
+            return jsonify({"status": "success"})
             
         elif user_sessions.get(sender_id, {}).get("state") == "waiting_staff_no":
             res = jms_api.search_user(text)
@@ -106,6 +118,7 @@ def event_handler():
             else:
                 send_card(chat_id, build_card("❌ ไม่พบข้อมูล", "red", [res.get("message", "ไม่พบข้อมูล")]))
                 user_sessions.pop(sender_id, None)
+            return jsonify({"status": "success"})
         
     return jsonify({"status": "success"})
 
