@@ -214,11 +214,26 @@ def card_token_invalid():
     )
 
 
+def card_ask_token():
+    return build_card(
+        title="🔑 อัปเดต Token",
+        template="blue",
+        lines=["กรุณาวาง **Token ใหม่** เป็นข้อความถัดไป", "(คัดลอกมาจาก Authtoken ในเว็บ JMS)"],
+        note="พิมพ์ `ยกเลิก` เพื่อยกเลิก",
+    )
+
+
 def card_token_updated():
     return build_card(
         title="✅ อัปเดต Token สำเร็จ",
         template="green",
-        lines=["Token ใหม่ถูกบันทึกเรียบร้อยแล้ว", "สามารถใช้งานค้นหา Staff ได้ตามปกติ"],
+        lines=[
+            "Token ใหม่ถูกบันทึกเรียบร้อยแล้ว",
+            "สามารถใช้งานค้นหา Staff ได้ตามปกติ",
+            "",
+            "⚠️ **หมายเหตุ:** ค่านี้จะหายไปถ้าเซิร์ฟเวอร์ restart",
+            "แนะนำให้อัปเดต `JMS_AUTH_TOKEN` ใน Render ด้วยเพื่อความชัวร์",
+        ],
         note="พิมพ์ `ค้นหา ID` เพื่อเริ่มค้นหา",
     )
 
@@ -321,12 +336,16 @@ def event_handler():
 
         EXIT_WORDS = {"exit", "ยกเลิก"}
         RESTART_WORDS = {"ค้นหา", "ค้นหา id", "start", "เริ่ม", "เริ่มค้นหา"}
+        ADD_TOKEN_WORDS = {"เพิ่ม token", "เพิ่มtoken", "add token"}
 
-        # --- คำสั่ง settoken <token> ---
+        current_state = user_sessions.get(sender_id, {}).get("state")
+
+        # --- คำสั่ง settoken <token> (พิมพ์รวมบรรทัดเดียว สำหรับผู้ใช้ที่คุ้นเคย) ---
         if text_lower.startswith("settoken"):
             parts = text.split(None, 1)
             if len(parts) == 2 and parts[1].strip():
                 jms_api.set_token(parts[1].strip())
+                user_sessions.pop(sender_id, None)
                 card = card_token_updated()
             else:
                 card = card_token_format_error()
@@ -335,28 +354,41 @@ def event_handler():
             user_sessions.pop(sender_id, None)
             card = card_cancelled()
 
-        elif text_lower in RESTART_WORDS or sender_id not in user_sessions:
+        # --- กำลังรอรับ Token ที่วางมาเป็นข้อความถัดไป (จากปุ่ม 'เพิ่ม Token') ---
+        elif current_state == "waiting_token":
+            jms_api.set_token(text.strip())
+            user_sessions.pop(sender_id, None)
+            card = card_token_updated()
+
+        # --- กดปุ่มเมนู / พิมพ์ 'เพิ่ม Token' เพื่อเข้าสู่โหมดรอรับ token ---
+        elif text_lower in ADD_TOKEN_WORDS:
+            user_sessions[sender_id] = {"state": "waiting_token"}
+            card = card_ask_token()
+
+        elif text_lower in RESTART_WORDS:
             user_sessions[sender_id] = {"state": "waiting_staff_no"}
             card = card_ask_staff_no()
 
+        elif current_state == "waiting_choice":
+            if text in ["1", "2", "3", "4"]:
+                user = user_sessions[sender_id]["user_data"]
+                card = process_choice(user, text)
+                user_sessions.pop(sender_id, None)
+            else:
+                card = card_invalid_choice()
+
+        # --- ค่าเริ่มต้น: ไม่ว่าจะยังไม่มี session หรืออยู่ใน state waiting_staff_no
+        #     ก็ถือว่าข้อความนี้คือ Staff No แล้วค้นหาทันที (แก้บั๊กต้องพิมพ์ 2 รอบ) ---
         else:
-            state = user_sessions[sender_id]["state"]
-            if state == "waiting_staff_no":
-                user = jms_api.search_user(text)
-                if user.get("token_invalid"):
-                    card = card_token_invalid()
-                elif not user["found"]:
-                    card = card_not_found(user["message"])
-                else:
-                    user_sessions[sender_id].update({"state": "waiting_choice", "user_data": user})
-                    card = card_user_menu(user)
-            elif state == "waiting_choice":
-                if text in ["1", "2", "3", "4"]:
-                    user = user_sessions[sender_id]["user_data"]
-                    card = process_choice(user, text)
-                    user_sessions.pop(sender_id, None)
-                else:
-                    card = card_invalid_choice()
+            user = jms_api.search_user(text)
+            if user.get("token_invalid"):
+                card = card_token_invalid()
+            elif not user["found"]:
+                card = card_not_found(user["message"])
+                user_sessions[sender_id] = {"state": "waiting_staff_no"}
+            else:
+                user_sessions[sender_id] = {"state": "waiting_choice", "user_data": user}
+                card = card_user_menu(user)
 
         print(f"💬 card='{json.dumps(card, ensure_ascii=False) if card else None}'", flush=True)
 
