@@ -192,10 +192,6 @@ def card_user_menu(user: dict, result_message: str = None, new_password: str = N
     )
 
 
-def card_cancelled():
-    return card_welcome()
-
-
 def card_token_invalid():
     return build_card(
         title="⚠️ Token หมดอายุ",
@@ -311,49 +307,53 @@ def event_handler():
 
         print(f"🖱️ CARD ACTION: operator_id={operator_id}, chat_id={chat_id}, value={value}", flush=True)
 
-        card = None
-
+        # A. การกดปุ่มเมนู "ค้นหา ID" หรือ "เพิ่ม Token"
+        # ให้รันพฤติกรรมดั้งเดิม คือการ "ส่งข้อความใหม่" เพื่อให้ได้ลักษณะตามรูปที่ 2 (ไม่ทับการ์ดต้อนรับใบเดิม)
         if "menu" in value:
-            # กดปุ่มจากการ์ดต้อนรับ (ค้นหา ID / เพิ่ม Token)
             menu = value["menu"]
             if menu == "search":
                 user_sessions[operator_id] = {"state": "waiting_staff_no"}
-                card = card_ask_staff_no()
+                send_card(chat_id, card_ask_staff_no())
             elif menu == "token":
                 user_sessions[operator_id] = {"state": "waiting_token"}
-                card = card_ask_token()
+                send_card(chat_id, card_ask_token())
+            
+            # ตอบกลับ Lark เพื่อยอมรับ callback สำเร็จ
+            return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
                 
+        # B. การกดเลือกการทำรายการ (1-4) หรือกดยกเลิก
+        # ให้ใช้พฤติกรรมแบบใหม่ คือการอัปเดตการ์ดเมนูใบเดิมแบบ In-place เพื่อไม่ให้ส่งข้อความใหม่พร่ำเพรื่อ
         elif "choice" in value:
             choice = value["choice"]
             if choice == "cancel":
-                # เคลียร์ session และอัปเดตหน้าจอกลับเป็นการ์ดต้อนรับเริ่มต้น
+                # เคลียร์ session และอัปเดตหน้าจอกลับเป็นการ์ดต้อนรับเริ่มต้น (ในตำแหน่งการ์ดเดิม)
                 user_sessions.pop(operator_id, None)
-                card = card_welcome()
+                return jsonify({
+                    "toast": {"text": "ยกเลิกรายการแล้ว"},
+                    "card": card_welcome()
+                })
             elif operator_id in user_sessions and user_sessions[operator_id].get("state") == "waiting_choice":
                 user = user_sessions[operator_id]["user_data"]
-                # ประมวลผลและส่งการ์ดเมนูที่อัปเดตแล้วกลับไป
+                # ประมวลผลและส่งการ์ดเมนูที่อัปเดตผลลัพธ์แล้วกลับไปทับใบเดิม
                 card = process_choice(user, choice)
-                # เพื่อให้ทำรายการต่อเนื่องได้ เราจะไม่ลบ session ทันที
-                # เว้นแต่กรณี token_invalid
                 if card.get("header", {}).get("template") == "orange":  # token invalid
                     user_sessions.pop(operator_id, None)
+                
+                return jsonify({
+                    "toast": {"text": "ดำเนินการเรียบร้อย"},
+                    "card": card
+                })
             else:
-                card = build_card(
+                expired_card = build_card(
                     title="⚠️ รายการหมดอายุ",
                     template="orange",
                     lines=["รายการนี้ถูกใช้ไปแล้ว หรือหมดอายุ", "กรุณากดปุ่ม 🔍 ค้นหา ID เพื่อค้นหาใหม่"],
                 )
+                return jsonify({
+                    "card": expired_card
+                })
 
-        if card:
-            return jsonify({
-                "toast": {
-                    "type": "success",
-                    "content": "ดำเนินการเรียบร้อย"
-                },
-                "card": card
-            })
-        
-        return jsonify({"toast": {"type": "success", "content": "กำลังดำเนินการ..."}})
+        return jsonify({"toast": {"text": "กำลังดำเนินการ..."}})
 
     # ---------------------------------------------------
     # 2. ข้อความปกติ
@@ -438,13 +438,33 @@ def event_handler():
 
         # --- ไม่มี session ใดๆ เลย (เช่น ทักทาย/ข้อความทั่วไป) ---
         else:
-            # ในห้องแชทกลุ่ม จะไม่สแปม welcome card พร่ำเพรื่อ ยกเว้นแต่ผู้ใช้พิมพ์เจาะจงหรือแชทแบบส่วนตัว (p2p)
-            if chat_type == "p2p":
+            # รายการคำสั่งทักทายภาษาไทยและอังกฤษ
+            greetings = {
+                "สวัสดี", "หวัดดี", "สวัสดีครับ", "สวัสดีค่ะ", "สวัสดีจ้า", 
+                "เริ่ม", "hello", "hi", "เมนู", "menu", "ช่วยหน่อย", "help"
+            }
+            
+            if text_lower in greetings:
                 card = card_welcome()
             else:
-                # ในกลุ่ม ถ้าโดน Mention ด้วยข้อความอื่น ๆ อาจส่ง welcome card เฉพาะคำสั่งเริ่มต้น
-                if text_lower in {"เริ่ม", "hello", "hi", "เมนู", "menu", "ช่วยหน่อย", "help"}:
-                    card = card_welcome()
+                # หากไม่มี session ค้างอยู่ และพิมพ์ข้อความที่มีความยาว >= 5 และมีตัวเลขอยู่ด้วย (บ่งบอกว่าเป็น Staff ID)
+                # จะทำการค้นหาให้โดยอัตโนมัติ เพื่ออำนวยความสะดวกให้ผู้ใช้ไม่ต้องพิมพ์ "ค้นหา ID" ก่อน
+                if len(text) >= 5 and any(char.isdigit() for char in text):
+                    user = jms_api.search_user(text)
+                    if user.get("token_invalid"):
+                        card = card_token_invalid()
+                    elif user.get("found"):
+                        user_sessions[sender_id] = {"state": "waiting_choice", "user_data": user}
+                        card = card_user_menu(user)
+                    else:
+                        card = card_not_found(user["message"])
+                else:
+                    # หากเป็นแชทส่วนตัว (p2p) และพิมพ์อย่างอื่นที่ไม่ใช่ Staff ID ให้แสดงการ์ดต้อนรับ
+                    if chat_type == "p2p":
+                        card = card_welcome()
+                    else:
+                        # หากเป็นแชทกลุ่ม และพิมพ์คำอื่น ๆ ที่ไม่ใช่คำทักทายและไม่ใช่ Staff ID ให้เงียบไว้เพื่อไม่ให้รบกวนกลุ่ม
+                        pass
 
         print(f"💬 card='{json.dumps(card, ensure_ascii=False) if card else None}'", flush=True)
 
